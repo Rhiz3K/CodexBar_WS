@@ -1,6 +1,9 @@
 // Routes.swift
 // HTTP Routes for CodexBar Server
 // Cross-platform: macOS and Linux
+//
+// TODO: Refactor API responses to use Codable structs instead of [String: Any] dictionaries
+// for type safety and better maintainability. See PR review comments.
 
 import CodexBarCore
 import Foundation

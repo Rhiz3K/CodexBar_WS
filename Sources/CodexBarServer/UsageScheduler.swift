@@ -388,8 +388,25 @@ actor UsageScheduler {
             process.executableURL = URL(fileURLWithPath: path)
             process.arguments = arguments
 
-            // Inherit environment for API keys etc.
-            var env = ProcessInfo.processInfo.environment
+            // Filter environment to only include necessary variables (security)
+            let fullEnv = ProcessInfo.processInfo.environment
+            let allowedKeys: Set<String> = [
+                // Core execution
+                "PATH", "HOME", "SHELL", "USER", "LOGNAME", "LANG", "LC_ALL", "TERM",
+                // Proxy settings
+                "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy",
+                // Provider API keys
+                "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+                "GOOGLE_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY",
+            ]
+            let allowedPrefixes = ["OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "CODEX_", "CLAUDE_"]
+
+            var env: [String: String] = [:]
+            for (key, value) in fullEnv {
+                if allowedKeys.contains(key) || allowedPrefixes.contains(where: { key.hasPrefix($0) }) {
+                    env[key] = value
+                }
+            }
             env["NO_COLOR"] = "1" // Disable ANSI colors
             process.environment = env
 

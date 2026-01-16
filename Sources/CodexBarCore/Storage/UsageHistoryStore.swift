@@ -429,8 +429,12 @@ public final class UsageHistoryStore: @unchecked Sendable {
     }
 
     private func setSchemaVersion(_ version: Int) {
-        let sql = "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '\(version)')"
-        sqlite3_exec(self.db, sql, nil, nil, nil)
+        let sql = "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, String(version), -1, Self.SQLITE_TRANSIENT)
+        _ = sqlite3_step(stmt)
     }
 
     private func migrate(from oldVersion: Int, to newVersion: Int) throws {
