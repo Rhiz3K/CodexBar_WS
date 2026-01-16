@@ -27,14 +27,18 @@ Linux support via Omarchy: community Waybar module and TUI, driven by the `codex
 ### Linux Server (Web Dashboard)
 Run a web dashboard on Linux with real-time usage monitoring:
 ```bash
-# Build
-export PATH=/opt/swift/usr/bin:$PATH
-swift build --product CodexBarServer
-swift build --product CodexBarCLI
+# Install
+brew install steipete/tap/codexbar
 
-# Run
-./.build/debug/CodexBarServer -v
-# Dashboard at http://127.0.0.1:8080/
+# Run (foreground)
+codexbar server run --port 9000 -v
+# Dashboard at http://127.0.0.1:9000/
+
+# Autostart (systemd user service; starts after login)
+codexbar server install --port 9000 --interval 300 -v
+
+# Uninstall
+codexbar server uninstall
 ```
 
 See [docs/server.md](docs/server.md) for full documentation.

@@ -18,16 +18,17 @@ struct CodexBarServer: AsyncParsableCommand {
     )
 
     @Option(name: .long, help: "Bind address.")
-    var host: String = "127.0.0.1"
+    var host: String = ProcessInfo.processInfo.environment["CODEXBAR_HOST"] ?? "127.0.0.1"
 
     @Option(name: .long, help: "Port number.")
-    var port: Int = 8080
+    var port: Int = Int(ProcessInfo.processInfo.environment["CODEXBAR_PORT"] ?? "") ?? 8080
 
     @Option(name: .long, help: "SQLite database path.")
-    var db: String = UsageHistoryStore.defaultDatabasePath()
+    var db: String = ProcessInfo.processInfo.environment["CODEXBAR_DB_PATH"]
+        ?? UsageHistoryStore.defaultDatabasePath()
 
     @Option(name: .long, help: "Scheduler interval in seconds.")
-    var interval: Int = 300
+    var interval: Int = Int(ProcessInfo.processInfo.environment["CODEXBAR_INTERVAL"] ?? "") ?? 300
 
     @Flag(name: .long, help: "Disable automatic usage collection.")
     var noScheduler: Bool = false

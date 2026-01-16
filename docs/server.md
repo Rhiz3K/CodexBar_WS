@@ -13,12 +13,38 @@ A Linux-compatible web server that provides a real-time dashboard for monitoring
 
 ## Quick Start
 
-### Requirements
+### Install (recommended)
 
-- Swift 6.0+ (`/opt/swift/usr/bin` on Linux)
-- CodexBarCLI built and available
+```bash
+brew tap steipete/tap
+brew install steipete/tap/codexbar
+```
 
-### Build
+### Run
+
+```bash
+# Start server (foreground)
+codexbar server run -v
+
+# With custom port
+codexbar server run --port 9000
+```
+
+### Autostart (systemd user service)
+
+```bash
+# Install + enable + start the service (starts after login)
+codexbar server install --port 9000 --interval 300 -v
+
+# Inspect
+systemctl --user status codexbar-server
+journalctl --user -u codexbar-server -f
+
+# Uninstall
+codexbar server uninstall
+```
+
+### Build from source (advanced)
 
 ```bash
 # Set Swift path (Linux)
@@ -29,19 +55,9 @@ swift build --product CodexBarServer
 
 # Build CLI (required for data fetching)
 swift build --product CodexBarCLI
-```
 
-### Run
-
-```bash
-# Start server (foreground)
+# Run
 ./.build/debug/CodexBarServer -v
-
-# Start server (background)
-nohup ./.build/debug/CodexBarServer -v > /tmp/codexbar-server.log 2>&1 &
-
-# With custom port
-./.build/debug/CodexBarServer --port 9000
 ```
 
 ### Access
@@ -52,6 +68,8 @@ nohup ./.build/debug/CodexBarServer -v > /tmp/codexbar-server.log 2>&1 &
 ## Configuration
 
 ### Environment Variables
+
+The server primarily uses CLI flags. These environment variables are supported as defaults (CLI flags still override them):
 
 | Variable | Default | Description |
 |----------|---------|-------------|

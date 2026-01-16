@@ -34,8 +34,17 @@ jobs:
           swift-version: "6.2.1"
           skip-verify-signature: true
 
+      - name: Install system dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev libcurl4-openssl-dev pkg-config
+
       - name: Build CodexBarCLI (release)
         run: swift build -c release --product CodexBarCLI --static-swift-stdlib
+
+      - name: Build CodexBarServer (release)
+        run: swift build -c release --product CodexBarServer --static-swift-stdlib
 
       - name: Package
         id: pkg
@@ -57,11 +66,22 @@ jobs:
 
           BIN_DIR="$(swift build -c release --product CodexBarCLI --static-swift-stdlib --show-bin-path)"
           OUT_DIR="$(mktemp -d)"
+
           install -m 0755 "$BIN_DIR/CodexBarCLI" "$OUT_DIR/CodexBarCLI"
           ln -s "CodexBarCLI" "$OUT_DIR/codexbar"
 
+          install -m 0755 "$BIN_DIR/CodexBarServer" "$OUT_DIR/CodexBarServer"
+          ln -s "CodexBarServer" "$OUT_DIR/codexbar-server"
+
+          RES_DIR="$BIN_DIR/CodexBar_CodexBarServer.resources"
+          if [[ ! -d "$RES_DIR" ]]; then
+            echo "Missing server resources at $RES_DIR" >&2
+            exit 1
+          fi
+          cp -R "$RES_DIR" "$OUT_DIR/"
+
           ASSET="CodexBarCLI-${TAG}-linux-${ARCH}.tar.gz"
-          (cd "$OUT_DIR" && tar czf "$ASSET" CodexBarCLI codexbar)
+          (cd "$OUT_DIR" && tar czf "$ASSET" CodexBarCLI codexbar CodexBarServer codexbar-server CodexBar_CodexBarServer.resources)
           sha256sum "$OUT_DIR/$ASSET" > "$OUT_DIR/$ASSET.sha256"
 
           echo "out_dir=$OUT_DIR" >> "$GITHUB_OUTPUT"
