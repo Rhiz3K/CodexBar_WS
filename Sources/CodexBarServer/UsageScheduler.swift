@@ -33,12 +33,13 @@ actor UsageScheduler {
         store: UsageHistoryStore,
         providers _: [UsageProvider] = [],
         interval: TimeInterval,
-        logger: Logger
+        logger: Logger,
+        cliPath: String? = nil
     ) {
         self.store = store
         self.interval = interval
         self.logger = logger
-        self.cliPath = Self.findCodexBarCLI()
+        self.cliPath = Self.findCodexBarCLI(explicitPath: cliPath)
     }
 
     /// Start the scheduler
@@ -315,8 +316,27 @@ actor UsageScheduler {
 
     // MARK: - CLI Discovery
 
-    private static func findCodexBarCLI() -> String? {
-        // Check multiple possible locations
+    private static func findCodexBarCLI(explicitPath: String? = nil) -> String? {
+        // 1. Explicit path from argument
+        if let path = explicitPath, FileManager.default.isExecutableFile(atPath: path) {
+            return path
+        }
+
+        // 2. Environment variable CODEXBAR_CLI_PATH
+        if let envPath = ProcessInfo.processInfo.environment["CODEXBAR_CLI_PATH"],
+           FileManager.default.isExecutableFile(atPath: envPath) {
+            return envPath
+        }
+
+        // 3. Try to find via PATH first (prioritize system installation)
+        if let path = try? Self.which("codexbar") {
+            return path
+        }
+        if let path = try? Self.which("CodexBarCLI") {
+            return path
+        }
+
+        // 4. Fallback to hardcoded candidate paths
         let candidates = [
             // Built from source (debug)
             FileManager.default.currentDirectoryPath + "/.build/debug/CodexBarCLI",
@@ -337,14 +357,6 @@ actor UsageScheduler {
             if FileManager.default.isExecutableFile(atPath: path) {
                 return path
             }
-        }
-
-        // Try to find via PATH using 'which'
-        if let path = try? Self.which("codexbar") {
-            return path
-        }
-        if let path = try? Self.which("CodexBarCLI") {
-            return path
         }
 
         return nil

@@ -23,6 +23,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-syntax", from: "600.0.0"),
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "1.10.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird", from: "2.0.0"),
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
         sweetCookieKitDependency,
     ],
     targets: {
@@ -82,6 +83,7 @@ let package = Package(
                     "CodexBarCore",
                     .product(name: "Hummingbird", package: "hummingbird"),
                     .product(name: "Logging", package: "swift-log"),
+                    .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 ],
                 path: "Sources/CodexBarServer",
                 swiftSettings: [
