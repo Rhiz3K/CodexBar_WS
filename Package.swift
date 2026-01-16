@@ -86,6 +86,9 @@ let package = Package(
                     .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 ],
                 path: "Sources/CodexBarServer",
+                resources: [
+                    .process("Resources"),
+                ],
                 swiftSettings: [
                     .enableUpcomingFeature("StrictConcurrency"),
                 ]),

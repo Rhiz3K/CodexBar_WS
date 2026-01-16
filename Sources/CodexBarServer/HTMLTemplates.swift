@@ -11,9 +11,9 @@ enum StaticFiles {
     static func get(_ path: String) -> String? {
         switch path {
         case "style.css":
-            return Self.css
+            return AssetLoader.loadStaticText("style.css")
         case "app.js":
-            return Self.javascript
+            return AssetLoader.loadStaticText("app.js")
         default:
             return nil
         }
@@ -26,7 +26,9 @@ enum StaticFiles {
         return "text/plain"
     }
 
-    static let css = """
+    // Deprecated: kept for reference during refactor.
+    // The live assets are now served from `Sources/CodexBarServer/Resources/static/`.
+    private static let css = """
         :root {
             --bg-primary: #0d1117;
             --bg-secondary: #161b22;
@@ -438,7 +440,9 @@ enum StaticFiles {
         }
         """
 
-    static let javascript = """
+    // Deprecated: kept for reference during refactor.
+    // The live assets are now served from `Sources/CodexBarServer/Resources/static/`.
+    private static let javascript = """
         const chartInstances = {};
         let use24HourFormat = localStorage.getItem('timeFormat') === '24h';
 
