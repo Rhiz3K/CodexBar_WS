@@ -2,86 +2,72 @@
 // CodexBar Web Server - Entry Point
 // Cross-platform: macOS and Linux
 
-import ArgumentParser
 import CodexBarCore
 import Foundation
 import Hummingbird
 import Logging
+import ArgumentParser
 
 @main
 struct CodexBarServer: AsyncParsableCommand {
+    static let version = "0.1.0"
+
     static let configuration = CommandConfiguration(
         commandName: "codexbar-server",
-        abstract: "CodexBar Server - Usage Statistics Dashboard",
-        discussion: """
-            A web server that displays usage statistics for AI providers (Codex, Claude, Gemini).
-            The server uses CodexBarCLI to fetch usage data and displays it on a dashboard.
-            """,
-        version: "0.1.0"
+        abstract: "CodexBar Server - Usage Statistics Dashboard"
     )
 
-    @Option(name: .long, help: "Bind address")
+    @Option(name: .long, help: "Bind address.")
     var host: String = "127.0.0.1"
 
-    @Option(name: .long, help: "Port number")
+    @Option(name: .long, help: "Port number.")
     var port: Int = 8080
 
-    @Option(name: .long, help: "SQLite database path")
-    var db: String?
+    @Option(name: .long, help: "SQLite database path.")
+    var db: String = UsageHistoryStore.defaultDatabasePath()
 
-    @Option(name: .long, help: "Scheduler interval in seconds")
+    @Option(name: .long, help: "Scheduler interval in seconds.")
     var interval: Int = 300
 
-    @Option(name: .long, help: "Path to CodexBarCLI executable")
-    var cliPath: String?
-
-    @Flag(name: .long, help: "Disable automatic usage collection")
+    @Flag(name: .long, help: "Disable automatic usage collection.")
     var noScheduler: Bool = false
 
-    @Flag(name: .shortAndLong, help: "Enable verbose logging")
+    @Option(name: .long, help: "Explicit path to CodexBarCLI executable.")
+    var cliPath: String?
+
+    @Flag(name: .shortAndLong, help: "Enable verbose logging.")
     var verbose: Bool = false
 
     func run() async throws {
-        // Build config from parsed arguments
         let config = ServerConfig(
             host: self.host,
             port: self.port,
-            databasePath: self.db ?? UsageHistoryStore.defaultDatabasePath(),
+            databasePath: self.db,
             enableScheduler: !self.noScheduler,
             schedulerInterval: TimeInterval(self.interval),
-            verbose: self.verbose,
-            cliPath: self.cliPath
+            cliPath: self.cliPath,
+            verbose: self.verbose
         )
 
-        // Setup logging
         var logger = Logger(label: "com.codexbar.server")
         logger.logLevel = config.verbose ? .debug : .info
 
-        logger.info("Starting CodexBar Server v\(Self.configuration.version)")
+        logger.info("Starting CodexBar Server v\(Self.version)")
         logger.info("Database: \(config.databasePath)")
         logger.info("Binding to \(config.host):\(config.port)")
 
-        // Initialize storage
         let store = try UsageHistoryStore(path: config.databasePath)
         let recordCount = (try? store.recordCount()) ?? 0
         logger.info("Database initialized with \(recordCount) records")
 
-        // Create app state
-        let appState = AppState(
-            store: store,
-            config: config,
-            logger: logger
-        )
+        let appState = AppState(store: store, config: config, logger: logger)
 
-        // Start usage scheduler if enabled
         if config.enableScheduler {
             await appState.startScheduler()
         }
 
-        // Build router
         let router = buildRouter(state: appState)
 
-        // Create and run application
         let app = Application(
             router: router,
             configuration: .init(
@@ -104,26 +90,8 @@ struct ServerConfig: Sendable {
     let databasePath: String
     let enableScheduler: Bool
     let schedulerInterval: TimeInterval
-    let verbose: Bool
     let cliPath: String?
-
-    init(
-        host: String = "127.0.0.1",
-        port: Int = 8080,
-        databasePath: String? = nil,
-        enableScheduler: Bool = true,
-        schedulerInterval: TimeInterval = 300,
-        verbose: Bool = false,
-        cliPath: String? = nil
-    ) {
-        self.host = host
-        self.port = port
-        self.databasePath = databasePath ?? UsageHistoryStore.defaultDatabasePath()
-        self.enableScheduler = enableScheduler
-        self.schedulerInterval = schedulerInterval
-        self.verbose = verbose
-        self.cliPath = cliPath
-    }
+    let verbose: Bool
 }
 
 // MARK: - Application State
@@ -142,9 +110,9 @@ final class AppState: Sendable {
         self.predictionEngine = UsagePredictionEngine()
         self.scheduler = UsageScheduler(
             store: store,
+            cliPath: config.cliPath,
             interval: config.schedulerInterval,
-            logger: logger,
-            cliPath: config.cliPath
+            logger: logger
         )
     }
 

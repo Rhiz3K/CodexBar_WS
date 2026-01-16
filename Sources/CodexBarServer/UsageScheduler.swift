@@ -31,15 +31,15 @@ actor UsageScheduler {
 
     init(
         store: UsageHistoryStore,
+        cliPath: String? = nil,
         providers _: [UsageProvider] = [],
         interval: TimeInterval,
-        logger: Logger,
-        cliPath: String? = nil
+        logger: Logger
     ) {
         self.store = store
         self.interval = interval
         self.logger = logger
-        self.cliPath = Self.findCodexBarCLI(explicitPath: cliPath)
+        self.cliPath = Self.resolveCLIPath(explicitPath: cliPath)
     }
 
     /// Start the scheduler
@@ -316,19 +316,22 @@ actor UsageScheduler {
 
     // MARK: - CLI Discovery
 
-    private static func findCodexBarCLI(explicitPath: String? = nil) -> String? {
-        // 1. Explicit path from argument
-        if let path = explicitPath, FileManager.default.isExecutableFile(atPath: path) {
-            return path
+    private static func resolveCLIPath(explicitPath: String?) -> String? {
+        // 1) Explicit path from CLI argument
+        if let explicitPath = explicitPath,
+           FileManager.default.isExecutableFile(atPath: explicitPath)
+        {
+            return explicitPath
         }
 
-        // 2. Environment variable CODEXBAR_CLI_PATH
+        // 2) Environment override
         if let envPath = ProcessInfo.processInfo.environment["CODEXBAR_CLI_PATH"],
-           FileManager.default.isExecutableFile(atPath: envPath) {
+           FileManager.default.isExecutableFile(atPath: envPath)
+        {
             return envPath
         }
 
-        // 3. Try to find via PATH first (prioritize system installation)
+        // 3) PATH lookup
         if let path = try? Self.which("codexbar") {
             return path
         }
@@ -336,7 +339,7 @@ actor UsageScheduler {
             return path
         }
 
-        // 4. Fallback to hardcoded candidate paths
+        // 4) Fallback: common build output locations
         let candidates = [
             // Built from source (debug)
             FileManager.default.currentDirectoryPath + "/.build/debug/CodexBarCLI",
