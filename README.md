@@ -24,6 +24,21 @@ brew install steipete/tap/codexbar
 Or download `CodexBarCLI-v<tag>-linux-<arch>.tar.gz` from GitHub Releases.
 Linux support via Omarchy: community Waybar module and TUI, driven by the `codexbar` executable.
 
+### Linux Server (Web Dashboard)
+Run a web dashboard on Linux with real-time usage monitoring:
+```bash
+# Build
+export PATH=/opt/swift/usr/bin:$PATH
+swift build --product CodexBarServer
+swift build --product CodexBarCLI
+
+# Run
+./.build/debug/CodexBarServer -v
+# Dashboard at http://127.0.0.1:8080/
+```
+
+See [docs/server.md](docs/server.md) for full documentation.
+
 ### First run
 - Open Settings → Providers and enable what you use.
 - Install/sign in to the provider sources you rely on (e.g. `codex`, `claude`, `gemini`, browser cookies, or OAuth; Antigravity requires the Antigravity app running).
@@ -93,6 +108,7 @@ Wondering if CodexBar scans your disk? It doesn’t crawl your filesystem; it re
 - Provider authoring: [docs/provider.md](docs/provider.md)
 - UI & icon notes: [docs/ui.md](docs/ui.md)
 - CLI reference: [docs/cli.md](docs/cli.md)
+- **Linux Server**: [docs/server.md](docs/server.md)
 - Architecture: [docs/architecture.md](docs/architecture.md)
 - Refresh loop: [docs/refresh-loop.md](docs/refresh-loop.md)
 - Status polling: [docs/status.md](docs/status.md)

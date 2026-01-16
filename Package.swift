@@ -22,14 +22,24 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log", from: "1.8.0"),
         .package(url: "https://github.com/apple/swift-syntax", from: "600.0.0"),
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "1.10.0"),
+        .package(url: "https://github.com/hummingbird-project/hummingbird", from: "2.0.0"),
         sweetCookieKitDependency,
     ],
     targets: {
         var targets: [Target] = [
+            .systemLibrary(
+                name: "CSQLite",
+                path: "Sources/CSQLite",
+                pkgConfig: "sqlite3",
+                providers: [
+                    .apt(["libsqlite3-dev"]),
+                    .brew(["sqlite3"]),
+                ]),
             .target(
                 name: "CodexBarCore",
                 dependencies: [
                     "CodexBarMacroSupport",
+                    "CSQLite",
                     .product(name: "Logging", package: "swift-log"),
                     .product(name: "SweetCookieKit", package: "SweetCookieKit"),
                 ],
@@ -65,6 +75,17 @@ let package = Package(
                 swiftSettings: [
                     .enableUpcomingFeature("StrictConcurrency"),
                     .enableExperimentalFeature("SwiftTesting"),
+                ]),
+            .executableTarget(
+                name: "CodexBarServer",
+                dependencies: [
+                    "CodexBarCore",
+                    .product(name: "Hummingbird", package: "hummingbird"),
+                    .product(name: "Logging", package: "swift-log"),
+                ],
+                path: "Sources/CodexBarServer",
+                swiftSettings: [
+                    .enableUpcomingFeature("StrictConcurrency"),
                 ]),
         ]
 
