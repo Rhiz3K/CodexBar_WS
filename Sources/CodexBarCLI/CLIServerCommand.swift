@@ -14,6 +14,10 @@ extension CodexBarCLI {
         let version = Self.cliVersionString()
         var argv = argv
 
+        if argv.first == "-V" || argv.first == "--version" {
+            Self.printVersion()
+        }
+
         if argv.isEmpty || argv.first == "-h" || argv.first == "--help" {
             print(Self.serverHelp(version: version))
             Self.exit(code: .success)
