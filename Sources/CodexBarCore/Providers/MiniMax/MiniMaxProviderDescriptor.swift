@@ -250,6 +250,7 @@ struct MiniMaxCodingPlanFetchStrategy: ProviderFetchStrategy {
         return label
     }
 
+    #if os(macOS)
     private static func loadTokenContext(browserDetection: BrowserDetection) -> TokenContext {
         #if os(macOS)
         let tokenLog: (String) -> Void = { msg in Self.log.debug(msg) }
@@ -280,6 +281,7 @@ struct MiniMaxCodingPlanFetchStrategy: ProviderFetchStrategy {
         return TokenContext(tokensByLabel: [:], groupIDByLabel: [:])
         #endif
     }
+    #endif
 
     private static func attemptFetch(
         cookieHeader: String,

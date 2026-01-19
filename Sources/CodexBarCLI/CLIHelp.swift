@@ -114,6 +114,7 @@ extension CodexBarCLI {
                        [--json-only]
                        [--json-output] [--log-level <trace|verbose|debug|info|warning|error|critical>] [-v|--verbose]
                        [--provider \(ProviderHelp.list)] [--no-color] [--pretty] [--refresh]
+          codexbar server <run|install|uninstall> [server options...]
           codexbar config <validate|dump> [--format text|json]
                                         [--json]
                                         [--json-only]

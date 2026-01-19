@@ -1,6 +1,13 @@
 import CodexBarMacroSupport
 import Foundation
 
+#if os(macOS)
+import SweetCookieKit
+private let kimiBrowserCookieOrder: [Browser] = [.arc, .chrome, .safari, .edge, .brave, .chromium]
+#else
+private let kimiBrowserCookieOrder: [Browser] = []
+#endif
+
 @ProviderDescriptorRegistration
 @ProviderDescriptorDefinition
 public enum KimiProviderDescriptor {

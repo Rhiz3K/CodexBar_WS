@@ -67,23 +67,38 @@ jobs:
           swift-version: "6.2.1"
           skip-verify-signature: true
 
+      - name: Install system dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev libcurl4-openssl-dev pkg-config
+
       - name: Build CodexBarCLI (release, static Swift stdlib)
         run: swift build -c release --product CodexBarCLI --static-swift-stdlib
+
+      - name: Build CodexBarServer (release, static Swift stdlib)
+        run: swift build -c release --product CodexBarServer --static-swift-stdlib
 
       - name: Swift Test (Linux only)
         run: swift test --parallel
 
-      - name: Smoke test CodexBarCLI
+      - name: Smoke test CodexBarCLI/CodexBarServer
         shell: bash
         run: |
           set -euo pipefail
           BIN_DIR="$(swift build -c release --product CodexBarCLI --static-swift-stdlib --show-bin-path)"
-          BIN="$BIN_DIR/CodexBarCLI"
-          "$BIN" --help >/dev/null
-          "$BIN" --version >/dev/null
-          if "$BIN" usage --provider codex --web >/dev/null 2>&1; then
+          CLI_BIN="$BIN_DIR/CodexBarCLI"
+          SERVER_BIN="$BIN_DIR/CodexBarServer"
+          "$CLI_BIN" --help >/dev/null
+          "$CLI_BIN" --version >/dev/null
+          "$SERVER_BIN" --help >/dev/null
+
+          if "$CLI_BIN" usage --provider codex --web >/dev/null 2>&1; then
             echo "Expected --web to fail on Linux"
             exit 1
           fi
-          "$BIN" usage --provider codex --web 2>&1 | tee /tmp/codexbarcli-stderr.txt >/dev/null || true
+          "$CLI_BIN" usage --provider codex --web 2>&1 | tee /tmp/codexbarcli-stderr.txt >/dev/null || true
           grep -q "macOS" /tmp/codexbarcli-stderr.txt
+
+          "$CLI_BIN" server --help >/dev/null
+          "$CLI_BIN" server run --help >/dev/null

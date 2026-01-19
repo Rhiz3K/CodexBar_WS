@@ -20,6 +20,11 @@ enum CodexBarCLI {
         let argv = Self.effectiveArgv(rawArgv)
         let outputPreferences = CLIOutputPreferences.from(argv: argv)
 
+        // Server passthrough needs to see --help/--version itself.
+        if argv.first == "server" {
+            Self.runServerCommand(argv: Array(argv.dropFirst()))
+        }
+
         // Fast path: global help/version before building descriptors.
         if let helpIndex = argv.firstIndex(where: { $0 == "-h" || $0 == "--help" }) {
             let command = helpIndex == 0 ? argv.dropFirst().first : argv.first
