@@ -890,9 +890,9 @@ enum StaticFiles {
 // MARK: - Dashboard Page
 
 enum DashboardPage {
-    static func render(state: AppState, costData: [String: ProviderCostData]) throws -> String {
-        let latest = try state.store.fetchLatestForAllProviders()
-        let predictions = try state.predictionEngine.predictAllBoth(from: state.store)
+    static func render(state: AppState, costData: [String: ProviderCostData]) async throws -> String {
+        let latest = try await state.store.fetchLatestForAllProviders()
+        let predictions = try await state.predictionEngine.predictAllBoth(from: state.store)
 
         var providerCards = ""
 
@@ -917,7 +917,7 @@ enum DashboardPage {
                 """
         }
 
-        let recordCount = (try? state.store.recordCount()) ?? 0
+        let recordCount = (try? await state.store.recordCount()) ?? 0
         let providerCount = latest.count
 
         return """
@@ -1213,10 +1213,10 @@ enum DashboardPage {
 // MARK: - Provider Detail Page
 
 enum ProviderPage {
-    static func render(provider: UsageProvider, state: AppState) throws -> String {
-        let records = try state.store.fetchHistory(provider: provider, limit: 200)
-        let prediction = try state.predictionEngine.predict(from: state.store, provider: provider)
-        let stats = try state.store.calculateStatistics(
+    static func render(provider: UsageProvider, state: AppState) async throws -> String {
+        let records = try await state.store.fetchHistory(provider: provider, limit: 200)
+        let prediction = try await state.predictionEngine.predict(from: state.store, provider: provider)
+        let stats = try await state.store.calculateStatistics(
             provider: provider,
             from: Date().addingTimeInterval(-24 * 3600),
             to: Date()

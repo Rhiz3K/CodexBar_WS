@@ -1,14 +1,26 @@
 // Routes.swift
 // HTTP Routes for CodexBar Server
 // Cross-platform: macOS and Linux
-//
-// TODO: Refactor API responses to use Codable structs instead of [String: Any] dictionaries
-// for type safety and better maintainability. See PR review comments.
 
 import CodexBarCore
 import Foundation
 import Hummingbird
 import NIOCore
+
+// MARK: - JSON Helpers
+
+private func jsonResponse<T: Encodable>(_ value: T, status: HTTPResponse.Status = .ok) throws -> Response {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    encoder.outputFormatting = [.prettyPrinted]
+    let json = try encoder.encode(value)
+
+    return Response(
+        status: status,
+        headers: [.contentType: "application/json"],
+        body: .init(byteBuffer: ByteBuffer(bytes: json))
+    )
+}
 
 // MARK: - Router Builder
 
@@ -32,7 +44,7 @@ func buildRouter(state: AppState) -> Router<BasicRequestContext> {
     // Dashboard (main page)
     router.get("/") { _, _ -> Response in
         let costData = await state.getCostData()
-        let html = try DashboardPage.render(state: state, costData: costData)
+        let html = try await DashboardPage.render(state: state, costData: costData)
         return Response(
             status: .ok,
             headers: [.contentType: "text/html; charset=utf-8"],
@@ -47,7 +59,7 @@ func buildRouter(state: AppState) -> Router<BasicRequestContext> {
         else {
             return Response(status: .notFound, body: .init(byteBuffer: ByteBuffer(string: "Provider not found")))
         }
-        let html = try ProviderPage.render(provider: provider, state: state)
+        let html = try await ProviderPage.render(provider: provider, state: state)
         return Response(
             status: .ok,
             headers: [.contentType: "text/html; charset=utf-8"],
@@ -57,57 +69,50 @@ func buildRouter(state: AppState) -> Router<BasicRequestContext> {
 
     // API: Get all providers status
     router.get("/api/status") { _, _ -> Response in
-        let latest = try state.store.fetchLatestForAllProviders()
-        let predictions = try state.predictionEngine.predictAll(from: state.store)
+        let latest = try await state.store.fetchLatestForAllProviders()
+        let predictions = try await state.predictionEngine.predictAll(from: state.store)
         let costData = await state.getCostData()
 
-        let isoFormatter = ISO8601DateFormatter()
-        var statusList: [[String: Any]] = []
-        for (providerName, record) in latest {
-            var entry: [String: Any] = [
-                "provider": providerName,
-                "timestamp": isoFormatter.string(from: record.timestamp),
-                "primaryUsage": record.primaryUsedPercent as Any,
-                "primaryResetAt": record.primaryResetsAt.map { isoFormatter.string(from: $0) } as Any,
-                "secondaryUsage": record.secondaryUsedPercent as Any,
-                "secondaryResetAt": record.secondaryResetsAt.map { isoFormatter.string(from: $0) } as Any,
-                "tertiaryUsage": record.tertiaryUsedPercent as Any,
-                "accountEmail": record.accountEmail as Any,
-                "accountPlan": record.accountPlan as Any,
-                "version": record.version as Any,
-                "sourceLabel": record.sourceLabel as Any,
-                "creditsRemaining": record.creditsRemaining as Any,
-            ]
-
-            if let prediction = predictions.first(where: { $0.provider == providerName }) {
-                entry["prediction"] = [
-                    "ratePerHour": prediction.ratePerHour,
-                    "timeToLimit": prediction.timeToLimitDescription as Any,
-                    "status": prediction.status.rawValue,
-                    "confidence": prediction.confidence,
-                ]
+        let statusList = latest.sorted(by: { $0.key < $1.key }).map { providerName, record in
+            let prediction = predictions.first(where: { $0.provider == providerName }).map { prediction in
+                APIPredictionSummary(
+                    ratePerHour: prediction.ratePerHour,
+                    timeToLimit: prediction.timeToLimitDescription,
+                    status: prediction.status.rawValue,
+                    confidence: prediction.confidence
+                )
             }
 
-            // Add cost data if available
-            if let cost = costData[providerName] {
-                entry["cost"] = [
-                    "sessionTokens": cost.sessionTokens as Any,
-                    "sessionCostUSD": cost.sessionCostUSD as Any,
-                    "last30DaysTokens": cost.last30DaysTokens as Any,
-                    "last30DaysCostUSD": cost.last30DaysCostUSD as Any,
-                    "modelsUsed": cost.modelsUsed,
-                    "updatedAt": isoFormatter.string(from: cost.updatedAt),
-                ]
+            let cost = costData[providerName].map { cost in
+                APICostSummary(
+                    sessionTokens: cost.sessionTokens,
+                    sessionCostUSD: cost.sessionCostUSD,
+                    last30DaysTokens: cost.last30DaysTokens,
+                    last30DaysCostUSD: cost.last30DaysCostUSD,
+                    modelsUsed: cost.modelsUsed,
+                    updatedAt: cost.updatedAt
+                )
             }
-            statusList.append(entry)
+
+            return APIProviderStatus(
+                provider: providerName,
+                timestamp: record.timestamp,
+                primaryUsage: record.primaryUsedPercent,
+                primaryResetAt: record.primaryResetsAt,
+                secondaryUsage: record.secondaryUsedPercent,
+                secondaryResetAt: record.secondaryResetsAt,
+                tertiaryUsage: record.tertiaryUsedPercent,
+                accountEmail: record.accountEmail,
+                accountPlan: record.accountPlan,
+                version: record.version,
+                sourceLabel: record.sourceLabel,
+                creditsRemaining: record.creditsRemaining,
+                prediction: prediction,
+                cost: cost
+            )
         }
 
-        let json = try JSONSerialization.data(withJSONObject: ["providers": statusList], options: .prettyPrinted)
-        return Response(
-            status: .ok,
-            headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(bytes: json))
-        )
+        return try jsonResponse(APIStatusResponse(providers: statusList))
     }
 
     // API: Get provider history
@@ -122,32 +127,23 @@ func buildRouter(state: AppState) -> Router<BasicRequestContext> {
         let hoursBack = request.uri.queryParameters.get("hours").flatMap(Double.init) ?? 24
         let since = Date().addingTimeInterval(-hoursBack * 3600)
 
-        let records = try state.store.fetchHistory(provider: provider, limit: limit, since: since)
+        let records = try await state.store.fetchHistory(provider: provider, limit: limit, since: since)
 
-        let formatter = ISO8601DateFormatter()
-        let dataPoints: [[String: Any]] = records.map { record in
-            [
-                "timestamp": formatter.string(from: record.timestamp),
-                "primaryUsage": record.primaryUsedPercent as Any,
-                "primaryResetDesc": record.primaryResetDesc as Any,
-                "secondaryUsage": record.secondaryUsedPercent as Any,
-                "secondaryResetDesc": record.secondaryResetDesc as Any,
-                "tertiaryUsage": record.tertiaryUsedPercent as Any,
-                "version": record.version as Any,
-                "sourceLabel": record.sourceLabel as Any,
-                "creditsRemaining": record.creditsRemaining as Any,
-            ]
+        let dataPoints = records.map { record in
+            APIHistoryPoint(
+                timestamp: record.timestamp,
+                primaryUsage: record.primaryUsedPercent,
+                primaryResetDesc: record.primaryResetDesc,
+                secondaryUsage: record.secondaryUsedPercent,
+                secondaryResetDesc: record.secondaryResetDesc,
+                tertiaryUsage: record.tertiaryUsedPercent,
+                version: record.version,
+                sourceLabel: record.sourceLabel,
+                creditsRemaining: record.creditsRemaining
+            )
         }
 
-        let json = try JSONSerialization.data(
-            withJSONObject: ["provider": name, "data": dataPoints],
-            options: .prettyPrinted
-        )
-        return Response(
-            status: .ok,
-            headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(bytes: json))
-        )
+        return try jsonResponse(APIHistoryResponse(provider: name, data: dataPoints))
     }
 
     // API: Get prediction for provider
@@ -160,57 +156,35 @@ func buildRouter(state: AppState) -> Router<BasicRequestContext> {
 
         let hoursAhead = request.uri.queryParameters.get("hours").flatMap(Double.init) ?? 1.0
 
-        guard let prediction = try state.predictionEngine.predict(
+        guard let prediction = try await state.predictionEngine.predict(
             from: state.store,
             provider: provider,
             forHoursAhead: hoursAhead
         ) else {
-            let json = try JSONSerialization.data(
-                withJSONObject: ["error": "Insufficient data for prediction"],
-                options: .prettyPrinted
-            )
-            return Response(
-                status: .ok,
-                headers: [.contentType: "application/json"],
-                body: .init(byteBuffer: ByteBuffer(bytes: json))
-            )
+            return try jsonResponse(APIErrorResponse(error: "Insufficient data for prediction"))
         }
 
-        let formatter = ISO8601DateFormatter()
-        let result: [String: Any] = [
-            "provider": prediction.provider,
-            "currentUsage": prediction.currentUsage,
-            "predictedUsage": prediction.predictedUsage,
-            "calculatedAt": formatter.string(from: prediction.calculatedAt),
-            "predictedAt": formatter.string(from: prediction.predictedAt),
-            "ratePerHour": prediction.ratePerHour,
-            "timeToLimit": prediction.timeToLimitDescription as Any,
-            "estimatedLimitDate": prediction.estimatedLimitDate.map { formatter.string(from: $0) } as Any,
-            "status": prediction.status.rawValue,
-            "confidence": prediction.confidence,
-            "dataPoints": prediction.dataPointCount,
-        ]
-
-        let json = try JSONSerialization.data(withJSONObject: result, options: .prettyPrinted)
-        return Response(
-            status: .ok,
-            headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(bytes: json))
+        return try jsonResponse(
+            APIPredictionResponse(
+                provider: prediction.provider,
+                currentUsage: prediction.currentUsage,
+                predictedUsage: prediction.predictedUsage,
+                calculatedAt: prediction.calculatedAt,
+                predictedAt: prediction.predictedAt,
+                ratePerHour: prediction.ratePerHour,
+                timeToLimit: prediction.timeToLimitDescription,
+                estimatedLimitDate: prediction.estimatedLimitDate,
+                status: prediction.status.rawValue,
+                confidence: prediction.confidence,
+                dataPoints: prediction.dataPointCount
+            )
         )
     }
 
     // API: Trigger manual fetch
     router.post("/api/fetch") { _, _ -> Response in
         await state.triggerFetch()
-        let json = try JSONSerialization.data(
-            withJSONObject: ["status": "ok", "message": "Fetch triggered"],
-            options: .prettyPrinted
-        )
-        return Response(
-            status: .ok,
-            headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(bytes: json))
-        )
+        return try jsonResponse(APIFetchResponse(status: "ok", message: "Fetch triggered"))
     }
 
     // API: Get statistics
@@ -225,53 +199,38 @@ func buildRouter(state: AppState) -> Router<BasicRequestContext> {
         let endDate = Date()
         let startDate = endDate.addingTimeInterval(-hoursBack * 3600)
 
-        let stats = try state.store.calculateStatistics(provider: provider, from: startDate, to: endDate)
-
-        let formatter = ISO8601DateFormatter()
-        let result: [String: Any] = [
-            "provider": stats.provider,
-            "periodStart": formatter.string(from: stats.periodStart),
-            "periodEnd": formatter.string(from: stats.periodEnd),
-            "recordCount": stats.recordCount,
-            "avgPrimaryUsage": stats.avgPrimaryUsage as Any,
-            "maxPrimaryUsage": stats.maxPrimaryUsage as Any,
-            "minPrimaryUsage": stats.minPrimaryUsage as Any,
-            "avgSecondaryUsage": stats.avgSecondaryUsage as Any,
-        ]
-
-        let json = try JSONSerialization.data(withJSONObject: result, options: .prettyPrinted)
-        return Response(
-            status: .ok,
-            headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(bytes: json))
+        let stats = try await state.store.calculateStatistics(provider: provider, from: startDate, to: endDate)
+        return try jsonResponse(
+            APIStatsResponse(
+                provider: stats.provider,
+                periodStart: stats.periodStart,
+                periodEnd: stats.periodEnd,
+                recordCount: stats.recordCount,
+                avgPrimaryUsage: stats.avgPrimaryUsage,
+                maxPrimaryUsage: stats.maxPrimaryUsage,
+                minPrimaryUsage: stats.minPrimaryUsage,
+                avgSecondaryUsage: stats.avgSecondaryUsage
+            )
         )
     }
 
     // API: Get cost data for all providers
     router.get("/api/cost") { _, _ -> Response in
         let costData = await state.getCostData()
-        let isoFormatter = ISO8601DateFormatter()
 
-        var costList: [[String: Any]] = []
-        for (providerName, cost) in costData.sorted(by: { $0.key < $1.key }) {
-            let entry: [String: Any] = [
-                "provider": providerName,
-                "sessionTokens": cost.sessionTokens as Any,
-                "sessionCostUSD": cost.sessionCostUSD as Any,
-                "last30DaysTokens": cost.last30DaysTokens as Any,
-                "last30DaysCostUSD": cost.last30DaysCostUSD as Any,
-                "modelsUsed": cost.modelsUsed,
-                "updatedAt": isoFormatter.string(from: cost.updatedAt),
-            ]
-            costList.append(entry)
+        let costList = costData.sorted(by: { $0.key < $1.key }).map { providerName, cost in
+            APICostWithProvider(
+                provider: providerName,
+                sessionTokens: cost.sessionTokens,
+                sessionCostUSD: cost.sessionCostUSD,
+                last30DaysTokens: cost.last30DaysTokens,
+                last30DaysCostUSD: cost.last30DaysCostUSD,
+                modelsUsed: cost.modelsUsed,
+                updatedAt: cost.updatedAt
+            )
         }
 
-        let json = try JSONSerialization.data(withJSONObject: ["costs": costList], options: .prettyPrinted)
-        return Response(
-            status: .ok,
-            headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(bytes: json))
-        )
+        return try jsonResponse(APICostResponse(costs: costList))
     }
 
     // API: Get cost data for specific provider
@@ -281,33 +240,19 @@ func buildRouter(state: AppState) -> Router<BasicRequestContext> {
         }
 
         guard let cost = await state.getCostData(for: name) else {
-            let json = try JSONSerialization.data(
-                withJSONObject: ["error": "No cost data for provider"],
-                options: .prettyPrinted
-            )
-            return Response(
-                status: .ok,
-                headers: [.contentType: "application/json"],
-                body: .init(byteBuffer: ByteBuffer(bytes: json))
-            )
+            return try jsonResponse(APIErrorResponse(error: "No cost data for provider"))
         }
 
-        let isoFormatter = ISO8601DateFormatter()
-        let result: [String: Any] = [
-            "provider": name,
-            "sessionTokens": cost.sessionTokens as Any,
-            "sessionCostUSD": cost.sessionCostUSD as Any,
-            "last30DaysTokens": cost.last30DaysTokens as Any,
-            "last30DaysCostUSD": cost.last30DaysCostUSD as Any,
-            "modelsUsed": cost.modelsUsed,
-            "updatedAt": isoFormatter.string(from: cost.updatedAt),
-        ]
-
-        let json = try JSONSerialization.data(withJSONObject: result, options: .prettyPrinted)
-        return Response(
-            status: .ok,
-            headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(bytes: json))
+        return try jsonResponse(
+            APICostWithProvider(
+                provider: name,
+                sessionTokens: cost.sessionTokens,
+                sessionCostUSD: cost.sessionCostUSD,
+                last30DaysTokens: cost.last30DaysTokens,
+                last30DaysCostUSD: cost.last30DaysCostUSD,
+                modelsUsed: cost.modelsUsed,
+                updatedAt: cost.updatedAt
+            )
         )
     }
 
@@ -321,29 +266,21 @@ func buildRouter(state: AppState) -> Router<BasicRequestContext> {
         let hoursBack = request.uri.queryParameters.get("hours").flatMap(Double.init) ?? 168 // 7 days
         let since = Date().addingTimeInterval(-hoursBack * 3600)
 
-        let records = try state.store.fetchCostHistory(provider: name, limit: limit, since: since)
-
-        let formatter = ISO8601DateFormatter()
-        let dataPoints: [[String: Any]] = records.map { record in
-            [
-                "timestamp": formatter.string(from: record.timestamp),
-                "sessionTokens": record.sessionTokens as Any,
-                "sessionCostUSD": record.sessionCostUSD as Any,
-                "periodTokens": record.periodTokens as Any,
-                "periodCostUSD": record.periodCostUSD as Any,
-                "periodDays": record.periodDays as Any,
-                "modelsUsed": record.models,
-            ]
+        let records = try await state.store.fetchCostHistory(provider: name, limit: limit, since: since)
+        let dataPoints = records.map { record in
+            APICostHistoryPoint(
+                timestamp: record.timestamp,
+                sessionTokens: record.sessionTokens,
+                sessionCostUSD: record.sessionCostUSD,
+                periodTokens: record.periodTokens,
+                periodCostUSD: record.periodCostUSD,
+                periodDays: record.periodDays,
+                modelsUsed: record.models
+            )
         }
 
-        let json = try JSONSerialization.data(
-            withJSONObject: ["provider": name, "data": dataPoints, "recordCount": records.count],
-            options: .prettyPrinted
-        )
-        return Response(
-            status: .ok,
-            headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(bytes: json))
+        return try jsonResponse(
+            APICostHistoryResponse(provider: name, data: dataPoints, recordCount: records.count)
         )
     }
 
@@ -353,65 +290,181 @@ func buildRouter(state: AppState) -> Router<BasicRequestContext> {
         let hoursBack = request.uri.queryParameters.get("hours").flatMap(Double.init) ?? 168 // 7 days
         let since = Date().addingTimeInterval(-hoursBack * 3600)
 
-        let records = try state.store.fetchAllCostHistory(limit: limit, since: since)
-
-        let formatter = ISO8601DateFormatter()
-        let dataPoints: [[String: Any]] = records.map { record in
-            [
-                "provider": record.provider,
-                "timestamp": formatter.string(from: record.timestamp),
-                "sessionTokens": record.sessionTokens as Any,
-                "sessionCostUSD": record.sessionCostUSD as Any,
-                "periodTokens": record.periodTokens as Any,
-                "periodCostUSD": record.periodCostUSD as Any,
-                "periodDays": record.periodDays as Any,
-                "modelsUsed": record.models,
-            ]
+        let records = try await state.store.fetchAllCostHistory(limit: limit, since: since)
+        let dataPoints = records.map { record in
+            APICostHistoryPointWithProvider(
+                provider: record.provider,
+                timestamp: record.timestamp,
+                sessionTokens: record.sessionTokens,
+                sessionCostUSD: record.sessionCostUSD,
+                periodTokens: record.periodTokens,
+                periodCostUSD: record.periodCostUSD,
+                periodDays: record.periodDays,
+                modelsUsed: record.models
+            )
         }
 
-        let json = try JSONSerialization.data(
-            withJSONObject: ["data": dataPoints, "recordCount": records.count],
-            options: .prettyPrinted
-        )
-        return Response(
-            status: .ok,
-            headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(bytes: json))
-        )
+        return try jsonResponse(APICostHistoryAllResponse(data: dataPoints, recordCount: records.count))
     }
 
     // Health check
     router.get("/health") { _, _ -> Response in
-        let usageCount = try state.store.recordCount()
-        let costCount = try state.store.costRecordCount()
-        let json = try JSONSerialization.data(
-            withJSONObject: [
-                "status": "ok",
-                "records": usageCount,
-                "costRecords": costCount,
-            ],
-            options: .prettyPrinted
-        )
-        return Response(
-            status: .ok,
-            headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(bytes: json))
-        )
+        let usageCount = try await state.store.recordCount()
+        let costCount = try await state.store.costRecordCount()
+        return try jsonResponse(APIHealthResponse(status: "ok", records: usageCount, costRecords: costCount))
     }
 
     // API: Get list of active providers (providers with data)
     router.get("/api/providers") { _, _ -> Response in
-        let providers = try state.store.fetchActiveProviders()
-        let json = try JSONSerialization.data(
-            withJSONObject: ["providers": providers],
-            options: .prettyPrinted
-        )
-        return Response(
-            status: .ok,
-            headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(bytes: json))
-        )
+        let providers = try await state.store.fetchActiveProviders()
+        return try jsonResponse(APIProvidersResponse(providers: providers))
     }
 
     return router
+}
+
+// MARK: - API Models
+
+private struct APIErrorResponse: Codable, Sendable {
+    let error: String
+}
+
+private struct APIStatusResponse: Codable, Sendable {
+    let providers: [APIProviderStatus]
+}
+
+private struct APIProviderStatus: Codable, Sendable {
+    let provider: String
+    let timestamp: Date
+    let primaryUsage: Double?
+    let primaryResetAt: Date?
+    let secondaryUsage: Double?
+    let secondaryResetAt: Date?
+    let tertiaryUsage: Double?
+    let accountEmail: String?
+    let accountPlan: String?
+    let version: String?
+    let sourceLabel: String?
+    let creditsRemaining: Double?
+    let prediction: APIPredictionSummary?
+    let cost: APICostSummary?
+}
+
+private struct APIPredictionSummary: Codable, Sendable {
+    let ratePerHour: Double
+    let timeToLimit: String?
+    let status: String
+    let confidence: Double
+}
+
+private struct APICostSummary: Codable, Sendable {
+    let sessionTokens: Int?
+    let sessionCostUSD: Double?
+    let last30DaysTokens: Int?
+    let last30DaysCostUSD: Double?
+    let modelsUsed: [String]
+    let updatedAt: Date
+}
+
+private struct APIHistoryResponse: Codable, Sendable {
+    let provider: String
+    let data: [APIHistoryPoint]
+}
+
+private struct APIHistoryPoint: Codable, Sendable {
+    let timestamp: Date
+    let primaryUsage: Double?
+    let primaryResetDesc: String?
+    let secondaryUsage: Double?
+    let secondaryResetDesc: String?
+    let tertiaryUsage: Double?
+    let version: String?
+    let sourceLabel: String?
+    let creditsRemaining: Double?
+}
+
+private struct APIPredictionResponse: Codable, Sendable {
+    let provider: String
+    let currentUsage: Double
+    let predictedUsage: Double
+    let calculatedAt: Date
+    let predictedAt: Date
+    let ratePerHour: Double
+    let timeToLimit: String?
+    let estimatedLimitDate: Date?
+    let status: String
+    let confidence: Double
+    let dataPoints: Int
+}
+
+private struct APIFetchResponse: Codable, Sendable {
+    let status: String
+    let message: String
+}
+
+private struct APIStatsResponse: Codable, Sendable {
+    let provider: String
+    let periodStart: Date
+    let periodEnd: Date
+    let recordCount: Int
+    let avgPrimaryUsage: Double?
+    let maxPrimaryUsage: Double?
+    let minPrimaryUsage: Double?
+    let avgSecondaryUsage: Double?
+}
+
+private struct APICostResponse: Codable, Sendable {
+    let costs: [APICostWithProvider]
+}
+
+private struct APICostWithProvider: Codable, Sendable {
+    let provider: String
+    let sessionTokens: Int?
+    let sessionCostUSD: Double?
+    let last30DaysTokens: Int?
+    let last30DaysCostUSD: Double?
+    let modelsUsed: [String]
+    let updatedAt: Date
+}
+
+private struct APICostHistoryResponse: Codable, Sendable {
+    let provider: String
+    let data: [APICostHistoryPoint]
+    let recordCount: Int
+}
+
+private struct APICostHistoryAllResponse: Codable, Sendable {
+    let data: [APICostHistoryPointWithProvider]
+    let recordCount: Int
+}
+
+private struct APICostHistoryPoint: Codable, Sendable {
+    let timestamp: Date
+    let sessionTokens: Int?
+    let sessionCostUSD: Double?
+    let periodTokens: Int?
+    let periodCostUSD: Double?
+    let periodDays: Int?
+    let modelsUsed: [String]
+}
+
+private struct APICostHistoryPointWithProvider: Codable, Sendable {
+    let provider: String
+    let timestamp: Date
+    let sessionTokens: Int?
+    let sessionCostUSD: Double?
+    let periodTokens: Int?
+    let periodCostUSD: Double?
+    let periodDays: Int?
+    let modelsUsed: [String]
+}
+
+private struct APIHealthResponse: Codable, Sendable {
+    let status: String
+    let records: Int
+    let costRecords: Int
+}
+
+private struct APIProvidersResponse: Codable, Sendable {
+    let providers: [String]
 }

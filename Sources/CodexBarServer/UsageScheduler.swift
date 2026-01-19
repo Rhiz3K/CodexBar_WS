@@ -178,7 +178,7 @@ actor UsageScheduler {
         var successCount = 0
         for payload in allPayloads {
             do {
-                try self.store.insertFromCLIPayload(payload)
+                try await self.store.insertFromCLIPayload(payload)
                 self.logger.info("[\(payload.provider)] \(payload.usage.primary?.usedPercent ?? 0)% session, \(payload.usage.secondary?.usedPercent ?? 0)% weekly (\(payload.source))")
                 successCount += 1
             } catch {
@@ -226,7 +226,7 @@ actor UsageScheduler {
 
                             // Persist to SQLite
                             do {
-                                try self.store.insertCost(
+                                try await self.store.insertCost(
                                     provider: cost.provider,
                                     timestamp: cost.updatedAt,
                                     sessionTokens: cost.sessionTokens,

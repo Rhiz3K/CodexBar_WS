@@ -58,7 +58,7 @@ struct CodexBarServer: AsyncParsableCommand {
         logger.info("Binding to \(config.host):\(config.port)")
 
         let store = try UsageHistoryStore(path: config.databasePath)
-        let recordCount = (try? store.recordCount()) ?? 0
+        let recordCount = (try? await store.recordCount()) ?? 0
         logger.info("Database initialized with \(recordCount) records")
 
         let appState = AppState(store: store, config: config, logger: logger)

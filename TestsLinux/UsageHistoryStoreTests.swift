@@ -27,7 +27,7 @@ struct UsageHistoryStoreTests {
     // MARK: - Basic Operations
 
     @Test
-    func insert_andFetchLatest() throws {
+    func insert_andFetchLatest() async throws {
         let store = try self.createTempStore()
 
         let record = UsageHistoryRecord(
@@ -47,9 +47,9 @@ struct UsageHistoryStoreTests {
             creditsRemaining: 100
         )
 
-        try store.insert(record)
+        try await store.insert(record)
 
-        let history = try store.fetchHistory(provider: .codex, limit: 1)
+        let history = try await store.fetchHistory(provider: .codex, limit: 1)
         #expect(history.count == 1)
         let latest = history.first!
         #expect(latest.provider == "codex")
@@ -60,7 +60,7 @@ struct UsageHistoryStoreTests {
     }
 
     @Test
-    func fetchHistory_returnsRecordsInDescendingOrder() throws {
+    func fetchHistory_returnsRecordsInDescendingOrder() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
@@ -71,10 +71,10 @@ struct UsageHistoryStoreTests {
                 timestamp: now.addingTimeInterval(Double(i) * 600),
                 primaryUsedPercent: Double(50 + i * 10)
             )
-            try store.insert(record)
+            try await store.insert(record)
         }
 
-        let history = try store.fetchHistory(provider: .claude, limit: 10)
+        let history = try await store.fetchHistory(provider: .claude, limit: 10)
 
         #expect(history.count == 5)
         // Should be descending order (newest first)
@@ -82,7 +82,7 @@ struct UsageHistoryStoreTests {
     }
 
     @Test
-    func fetchHistory_respectsLimit() throws {
+    func fetchHistory_respectsLimit() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
@@ -93,15 +93,15 @@ struct UsageHistoryStoreTests {
                 timestamp: now.addingTimeInterval(Double(i) * 60),
                 primaryUsedPercent: Double(i * 10)
             )
-            try store.insert(record)
+            try await store.insert(record)
         }
 
-        let history = try store.fetchHistory(provider: .gemini, limit: 5)
+        let history = try await store.fetchHistory(provider: .gemini, limit: 5)
         #expect(history.count == 5)
     }
 
     @Test
-    func fetchHistory_respectsSinceDate() throws {
+    func fetchHistory_respectsSinceDate() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
@@ -112,12 +112,12 @@ struct UsageHistoryStoreTests {
                 timestamp: now.addingTimeInterval(Double(i) * 600 - 7200), // -2h to -10min
                 primaryUsedPercent: Double(i * 5)
             )
-            try store.insert(record)
+            try await store.insert(record)
         }
 
         // Only get records from last 30 minutes (should exclude most)
         let since = now.addingTimeInterval(-1800)
-        let history = try store.fetchHistory(provider: .codex, limit: 100, since: since)
+        let history = try await store.fetchHistory(provider: .codex, limit: 100, since: since)
 
         // Should have fewer records than total (only recent ones)
         #expect(history.count < 12)
@@ -125,7 +125,7 @@ struct UsageHistoryStoreTests {
     }
 
     @Test
-    func fetchLatestForAllProviders_returnsAllProviders() throws {
+    func fetchLatestForAllProviders_returnsAllProviders() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
@@ -137,10 +137,10 @@ struct UsageHistoryStoreTests {
                 timestamp: now,
                 primaryUsedPercent: 50
             )
-            try store.insert(record)
+            try await store.insert(record)
         }
 
-        let latest = try store.fetchLatestForAllProviders()
+        let latest = try await store.fetchLatestForAllProviders()
 
         #expect(latest.count == 3)
         #expect(latest.keys.contains("codex"))
@@ -149,10 +149,11 @@ struct UsageHistoryStoreTests {
     }
 
     @Test
-    func recordCount_returnsCorrectCount() throws {
+    func recordCount_returnsCorrectCount() async throws {
         let store = try self.createTempStore()
 
-        #expect(try store.recordCount() == 0)
+        let initialCount = try await store.recordCount()
+        #expect(initialCount == 0)
 
         for i in 0 ..< 5 {
             let record = self.makeRecord(
@@ -160,14 +161,15 @@ struct UsageHistoryStoreTests {
                 timestamp: Date().addingTimeInterval(Double(i)),
                 primaryUsedPercent: Double(i * 10)
             )
-            try store.insert(record)
+            try await store.insert(record)
         }
 
-        #expect(try store.recordCount() == 5)
+        let finalCount = try await store.recordCount()
+        #expect(finalCount == 5)
     }
 
     @Test
-    func fetchActiveProviders_returnsOnlyProvidersWithData() throws {
+    func fetchActiveProviders_returnsOnlyProvidersWithData() async throws {
         let store = try self.createTempStore()
 
         // Insert records for only 2 providers
@@ -177,10 +179,10 @@ struct UsageHistoryStoreTests {
                 timestamp: Date(),
                 primaryUsedPercent: 50
             )
-            try store.insert(record)
+            try await store.insert(record)
         }
 
-        let activeProviders = try store.fetchActiveProviders()
+        let activeProviders = try await store.fetchActiveProviders()
 
         #expect(activeProviders.count == 2)
         #expect(activeProviders.contains("codex"))
@@ -191,7 +193,7 @@ struct UsageHistoryStoreTests {
     // MARK: - Statistics
 
     @Test
-    func calculateStatistics_computesCorrectly() throws {
+    func calculateStatistics_computesCorrectly() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
@@ -203,10 +205,10 @@ struct UsageHistoryStoreTests {
                 timestamp: now.addingTimeInterval(Double(i) * 600),
                 primaryUsedPercent: usage
             )
-            try store.insert(record)
+            try await store.insert(record)
         }
 
-        let stats = try store.calculateStatistics(
+        let stats = try await store.calculateStatistics(
             provider: .codex,
             from: now.addingTimeInterval(-100),
             to: now.addingTimeInterval(3600)
@@ -221,7 +223,7 @@ struct UsageHistoryStoreTests {
     // MARK: - CLI Payload Integration
 
     @Test
-    func insertFromCLIPayload_worksCorrectly() throws {
+    func insertFromCLIPayload_worksCorrectly() async throws {
         let store = try self.createTempStore()
 
         let payload = CLIProviderPayload(
@@ -251,9 +253,9 @@ struct UsageHistoryStoreTests {
             credits: nil
         )
 
-        try store.insertFromCLIPayload(payload)
+        try await store.insertFromCLIPayload(payload)
 
-        let history = try store.fetchHistory(provider: .codex, limit: 1)
+        let history = try await store.fetchHistory(provider: .codex, limit: 1)
         #expect(history.count == 1)
         let latest = history.first!
         #expect(latest.primaryUsedPercent == 75)
@@ -266,11 +268,11 @@ struct UsageHistoryStoreTests {
     // MARK: - Cost History Tests
 
     @Test
-    func insertCost_andFetchCostHistory() throws {
+    func insertCost_andFetchCostHistory() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
-        try store.insertCost(
+        try await store.insertCost(
             provider: "claude",
             timestamp: now,
             sessionTokens: 1_000_000,
@@ -281,7 +283,7 @@ struct UsageHistoryStoreTests {
             modelsUsed: ["claude-sonnet-4", "claude-opus-4"]
         )
 
-        let history = try store.fetchCostHistory(provider: "claude", limit: 1)
+        let history = try await store.fetchCostHistory(provider: "claude", limit: 1)
         #expect(history.count == 1)
 
         let latest = history.first!
@@ -295,13 +297,13 @@ struct UsageHistoryStoreTests {
     }
 
     @Test
-    func fetchCostHistory_returnsDescendingOrder() throws {
+    func fetchCostHistory_returnsDescendingOrder() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
         // Insert records at different times
         for i in 0 ..< 5 {
-            try store.insertCost(
+            try await store.insertCost(
                 provider: "codex",
                 timestamp: now.addingTimeInterval(Double(i) * 600),
                 sessionTokens: 100_000 * (i + 1),
@@ -313,7 +315,7 @@ struct UsageHistoryStoreTests {
             )
         }
 
-        let history = try store.fetchCostHistory(provider: "codex", limit: 10)
+        let history = try await store.fetchCostHistory(provider: "codex", limit: 10)
 
         #expect(history.count == 5)
         // Should be descending order (newest first)
@@ -321,13 +323,13 @@ struct UsageHistoryStoreTests {
     }
 
     @Test
-    func fetchCostHistory_respectsLimit() throws {
+    func fetchCostHistory_respectsLimit() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
         // Insert 10 records
         for i in 0 ..< 10 {
-            try store.insertCost(
+            try await store.insertCost(
                 provider: "claude",
                 timestamp: now.addingTimeInterval(Double(i) * 60),
                 sessionTokens: i * 1000,
@@ -339,18 +341,18 @@ struct UsageHistoryStoreTests {
             )
         }
 
-        let history = try store.fetchCostHistory(provider: "claude", limit: 5)
+        let history = try await store.fetchCostHistory(provider: "claude", limit: 5)
         #expect(history.count == 5)
     }
 
     @Test
-    func fetchCostHistory_respectsSinceDate() throws {
+    func fetchCostHistory_respectsSinceDate() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
         // Insert records spanning 2 hours (older records first)
         for i in 0 ..< 12 {
-            try store.insertCost(
+            try await store.insertCost(
                 provider: "codex",
                 timestamp: now.addingTimeInterval(Double(i) * 600 - 7200), // -2h to -10min
                 sessionTokens: i * 1000,
@@ -364,21 +366,21 @@ struct UsageHistoryStoreTests {
 
         // Only get records from last 30 minutes
         let since = now.addingTimeInterval(-1800)
-        let history = try store.fetchCostHistory(provider: "codex", limit: 100, since: since)
+        let history = try await store.fetchCostHistory(provider: "codex", limit: 100, since: since)
 
         // Should have fewer records than total
         #expect(history.count < 12)
     }
 
     @Test
-    func fetchLatestCostForAllProviders_returnsAllProviders() throws {
+    func fetchLatestCostForAllProviders_returnsAllProviders() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
         // Insert cost records for multiple providers
         let providers = ["codex", "claude", "gemini"]
         for provider in providers {
-            try store.insertCost(
+            try await store.insertCost(
                 provider: provider,
                 timestamp: now,
                 sessionTokens: 100_000,
@@ -390,7 +392,7 @@ struct UsageHistoryStoreTests {
             )
         }
 
-        let latest = try store.fetchLatestCostForAllProviders()
+        let latest = try await store.fetchLatestCostForAllProviders()
 
         #expect(latest.count == 3)
         #expect(latest.keys.contains("codex"))
@@ -399,13 +401,14 @@ struct UsageHistoryStoreTests {
     }
 
     @Test
-    func costRecordCount_returnsCorrectCount() throws {
+    func costRecordCount_returnsCorrectCount() async throws {
         let store = try self.createTempStore()
 
-        #expect(try store.costRecordCount() == 0)
+        let initialCount = try await store.costRecordCount()
+        #expect(initialCount == 0)
 
         for i in 0 ..< 5 {
-            try store.insertCost(
+            try await store.insertCost(
                 provider: "codex",
                 timestamp: Date().addingTimeInterval(Double(i)),
                 sessionTokens: i * 1000,
@@ -417,17 +420,18 @@ struct UsageHistoryStoreTests {
             )
         }
 
-        #expect(try store.costRecordCount() == 5)
+        let finalCount = try await store.costRecordCount()
+        #expect(finalCount == 5)
     }
 
     @Test
-    func fetchAllCostHistory_returnsMultipleProviders() throws {
+    func fetchAllCostHistory_returnsMultipleProviders() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
         // Insert for multiple providers
         for (i, provider) in ["codex", "claude"].enumerated() {
-            try store.insertCost(
+            try await store.insertCost(
                 provider: provider,
                 timestamp: now.addingTimeInterval(Double(i) * 60),
                 sessionTokens: (i + 1) * 100_000,
@@ -439,7 +443,7 @@ struct UsageHistoryStoreTests {
             )
         }
 
-        let history = try store.fetchAllCostHistory(limit: 10)
+        let history = try await store.fetchAllCostHistory(limit: 10)
 
         #expect(history.count == 2)
         let providers = Set(history.map(\.provider))
@@ -448,11 +452,11 @@ struct UsageHistoryStoreTests {
     }
 
     @Test
-    func costHistoryRecord_modelsParsingWorksCorrectly() throws {
+    func costHistoryRecord_modelsParsingWorksCorrectly() async throws {
         let store = try self.createTempStore()
 
         // Test with models
-        try store.insertCost(
+        try await store.insertCost(
             provider: "claude",
             timestamp: Date(),
             sessionTokens: 100_000,
@@ -463,7 +467,7 @@ struct UsageHistoryStoreTests {
             modelsUsed: ["model-a", "model-b", "model-c"]
         )
 
-        let history = try store.fetchCostHistory(provider: "claude", limit: 1)
+        let history = try await store.fetchCostHistory(provider: "claude", limit: 1)
         let record = history.first!
 
         #expect(record.models.count == 3)
@@ -473,11 +477,11 @@ struct UsageHistoryStoreTests {
     }
 
     @Test
-    func costHistoryRecord_nilModelsReturnsEmptyArray() throws {
+    func costHistoryRecord_nilModelsReturnsEmptyArray() async throws {
         let store = try self.createTempStore()
 
         // Test without models
-        try store.insertCost(
+        try await store.insertCost(
             provider: "gemini",
             timestamp: Date(),
             sessionTokens: 50_000,
@@ -488,19 +492,19 @@ struct UsageHistoryStoreTests {
             modelsUsed: nil
         )
 
-        let history = try store.fetchCostHistory(provider: "gemini", limit: 1)
+        let history = try await store.fetchCostHistory(provider: "gemini", limit: 1)
         let record = history.first!
 
         #expect(record.models.isEmpty)
     }
 
     @Test
-    func pruneOldCostRecords_deletesOldRecords() throws {
+    func pruneOldCostRecords_deletesOldRecords() async throws {
         let store = try self.createTempStore()
         let now = Date()
 
         // Insert old and new records
-        try store.insertCost(
+        try await store.insertCost(
             provider: "codex",
             timestamp: now.addingTimeInterval(-7 * 24 * 3600), // 7 days ago
             sessionTokens: 100_000,
@@ -511,7 +515,7 @@ struct UsageHistoryStoreTests {
             modelsUsed: nil
         )
 
-        try store.insertCost(
+        try await store.insertCost(
             provider: "codex",
             timestamp: now, // Now
             sessionTokens: 200_000,
@@ -522,28 +526,30 @@ struct UsageHistoryStoreTests {
             modelsUsed: nil
         )
 
-        #expect(try store.costRecordCount() == 2)
+        let initialCount = try await store.costRecordCount()
+        #expect(initialCount == 2)
 
         // Prune records older than 3 days
         let cutoff = now.addingTimeInterval(-3 * 24 * 3600)
-        let deleted = try store.pruneOldCostRecords(olderThan: cutoff)
+        let deleted = try await store.pruneOldCostRecords(olderThan: cutoff)
 
         #expect(deleted == 1)
-        #expect(try store.costRecordCount() == 1)
+        let prunedCount = try await store.costRecordCount()
+        #expect(prunedCount == 1)
 
         // Verify the recent record remains
-        let history = try store.fetchCostHistory(provider: "codex", limit: 10)
+        let history = try await store.fetchCostHistory(provider: "codex", limit: 10)
         #expect(history.count == 1)
         #expect(history.first?.sessionTokens == 200_000)
     }
 
     @Test
-    func deleteAllCostRecords_clearsAllRecords() throws {
+    func deleteAllCostRecords_clearsAllRecords() async throws {
         let store = try self.createTempStore()
 
         // Insert some records
         for i in 0 ..< 5 {
-            try store.insertCost(
+            try await store.insertCost(
                 provider: "claude",
                 timestamp: Date().addingTimeInterval(Double(i)),
                 sessionTokens: i * 1000,
@@ -555,10 +561,12 @@ struct UsageHistoryStoreTests {
             )
         }
 
-        #expect(try store.costRecordCount() == 5)
+        let preDeleteCount = try await store.costRecordCount()
+        #expect(preDeleteCount == 5)
 
-        try store.deleteAllCostRecords()
+        try await store.deleteAllCostRecords()
 
-        #expect(try store.costRecordCount() == 0)
+        let postDeleteCount = try await store.costRecordCount()
+        #expect(postDeleteCount == 0)
     }
 }

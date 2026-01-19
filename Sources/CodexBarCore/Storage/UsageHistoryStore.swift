@@ -8,10 +8,11 @@ import Foundation
 // MARK: - Usage History Store
 
 /// SQLite-based store for usage history
-public final class UsageHistoryStore: @unchecked Sendable {
-    private var db: OpaquePointer?
+public actor UsageHistoryStore {
     private let dbPath: String
     private let queue = DispatchQueue(label: "com.codexbar.usagehistory", qos: .utility)
+    private let handle: SQLiteHandle
+    private var db: OpaquePointer? { self.handle.db }
 
     private static let schemaVersion = 3
 
@@ -22,15 +23,9 @@ public final class UsageHistoryStore: @unchecked Sendable {
             self.dbPath = Self.defaultDatabasePath()
         }
 
-        try self.openDatabase()
-        try self.createTables()
-        try self.migrateIfNeeded()
-    }
-
-    deinit {
-        if self.db != nil {
-            sqlite3_close(self.db)
-        }
+        self.handle = try SQLiteHandle(path: self.dbPath)
+        try Self.createTables(db: self.handle.db)
+        try Self.migrateIfNeeded(db: self.handle.db)
     }
 
     // MARK: - Database Path
@@ -54,18 +49,37 @@ public final class UsageHistoryStore: @unchecked Sendable {
 
     // MARK: - Database Setup
 
-    private func openDatabase() throws {
-        let result = sqlite3_open(self.dbPath, &self.db)
-        guard result == SQLITE_OK else {
-            let errorMessage = String(cString: sqlite3_errmsg(self.db))
-            throw UsageHistoryError.openFailed(errorMessage)
+    private final class SQLiteHandle {
+        var db: OpaquePointer?
+
+        init(path: String) throws {
+            var db: OpaquePointer?
+            let result = sqlite3_open(path, &db)
+            guard result == SQLITE_OK else {
+                let errorMessage = db.map { String(cString: sqlite3_errmsg($0)) } ?? "Unknown error"
+                if db != nil {
+                    sqlite3_close(db)
+                }
+                throw UsageHistoryError.openFailed(errorMessage)
+            }
+
+            sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nil, nil, nil)
+            sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", nil, nil, nil)
+            self.db = db
         }
 
-        sqlite3_exec(self.db, "PRAGMA journal_mode=WAL;", nil, nil, nil)
-        sqlite3_exec(self.db, "PRAGMA synchronous=NORMAL;", nil, nil, nil)
+        deinit {
+            if self.db != nil {
+                sqlite3_close(self.db)
+            }
+        }
     }
 
-    private func createTables() throws {
+    private static func createTables(db: OpaquePointer?) throws {
+        guard let db else {
+            throw UsageHistoryError.openFailed("Database handle is not available")
+        }
+
         let createSQL = """
             CREATE TABLE IF NOT EXISTS usage_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,7 +134,7 @@ public final class UsageHistoryStore: @unchecked Sendable {
             """
 
         var errorMessage: UnsafeMutablePointer<CChar>?
-        let result = sqlite3_exec(self.db, createSQL, nil, nil, &errorMessage)
+        let result = sqlite3_exec(db, createSQL, nil, nil, &errorMessage)
 
         if result != SQLITE_OK {
             let message = errorMessage.map { String(cString: $0) } ?? "Unknown error"
@@ -129,18 +143,19 @@ public final class UsageHistoryStore: @unchecked Sendable {
         }
     }
 
-    private func migrateIfNeeded() throws {
-        let currentVersion = self.getSchemaVersion()
+    private static func migrateIfNeeded(db: OpaquePointer?) throws {
+        let currentVersion = Self.getSchemaVersion(db: db)
         if currentVersion < Self.schemaVersion {
-            try self.migrate(from: currentVersion, to: Self.schemaVersion)
-            self.setSchemaVersion(Self.schemaVersion)
+            try Self.migrate(db: db, from: currentVersion, to: Self.schemaVersion)
+            Self.setSchemaVersion(db: db, version: Self.schemaVersion)
         }
     }
 
-    private func getSchemaVersion() -> Int {
+    private static func getSchemaVersion(db: OpaquePointer?) -> Int {
+        guard let db else { return 0 }
         var stmt: OpaquePointer?
         let sql = "SELECT value FROM metadata WHERE key = 'schema_version'"
-        guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(stmt) }
 
         if sqlite3_step(stmt) == SQLITE_ROW, let text = sqlite3_column_text(stmt, 0) {
@@ -149,16 +164,21 @@ public final class UsageHistoryStore: @unchecked Sendable {
         return 0
     }
 
-    private func setSchemaVersion(_ version: Int) {
+    private static func setSchemaVersion(db: OpaquePointer?, version: Int) {
+        guard let db else { return }
         let sql = "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)"
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_text(stmt, 1, String(version), -1, Self.SQLITE_TRANSIENT)
         _ = sqlite3_step(stmt)
     }
 
-    private func migrate(from oldVersion: Int, to newVersion: Int) throws {
+    private static func migrate(db: OpaquePointer?, from oldVersion: Int, to newVersion: Int) throws {
+        guard let db else {
+            throw UsageHistoryError.openFailed("Database handle is not available")
+        }
+
         // Migration from v1 to v2: add new columns
         if oldVersion < 2 {
             let alterSQL = """
@@ -172,7 +192,7 @@ public final class UsageHistoryStore: @unchecked Sendable {
             for statement in alterSQL.split(separator: ";") {
                 let trimmed = statement.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
-                sqlite3_exec(self.db, trimmed + ";", nil, nil, nil)
+                sqlite3_exec(db, trimmed + ";", nil, nil, nil)
             }
         }
 
@@ -200,7 +220,7 @@ public final class UsageHistoryStore: @unchecked Sendable {
             for statement in createCostSQL.split(separator: ";") {
                 let trimmed = statement.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
-                sqlite3_exec(self.db, trimmed + ";", nil, nil, nil)
+                sqlite3_exec(db, trimmed + ";", nil, nil, nil)
             }
         }
     }
@@ -747,8 +767,8 @@ public final class UsageHistoryStore: @unchecked Sendable {
 
     /// Delete all cost records (for testing)
     public func deleteAllCostRecords() throws {
-        try self.queue.sync {
-            sqlite3_exec(self.db, "DELETE FROM cost_history", nil, nil, nil)
+        self.queue.sync {
+            _ = sqlite3_exec(self.db, "DELETE FROM cost_history", nil, nil, nil)
         }
     }
 
@@ -791,8 +811,8 @@ public final class UsageHistoryStore: @unchecked Sendable {
 
     /// Delete all records (for testing)
     public func deleteAllRecords() throws {
-        try self.queue.sync {
-            sqlite3_exec(self.db, "DELETE FROM usage_history", nil, nil, nil)
+        self.queue.sync {
+            _ = sqlite3_exec(self.db, "DELETE FROM usage_history", nil, nil, nil)
         }
     }
 

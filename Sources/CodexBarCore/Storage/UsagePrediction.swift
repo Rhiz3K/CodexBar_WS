@@ -208,9 +208,9 @@ public struct UsagePredictionEngine: Sendable {
         lookbackHours: Double = 24,
         forHoursAhead hours: Double = 1.0,
         usePrimary: Bool = true
-    ) throws -> UsagePrediction? {
+    ) async throws -> UsagePrediction? {
         let since = Date().addingTimeInterval(-lookbackHours * 3600)
-        let records = try store.fetchHistory(provider: provider, limit: 1000, since: since)
+        let records = try await store.fetchHistory(provider: provider, limit: 1000, since: since)
         return self.predict(records: records, forHoursAhead: hours, usePrimary: usePrimary)
     }
 
@@ -345,15 +345,15 @@ extension UsagePredictionEngine {
         provider: UsageProvider,
         lookbackHours: Double = 24,
         forHoursAhead hours: Double = 1.0
-    ) throws -> ProviderPredictions {
-        let primary = try self.predict(
+    ) async throws -> ProviderPredictions {
+        let primary = try await self.predict(
             from: store,
             provider: provider,
             lookbackHours: lookbackHours,
             forHoursAhead: hours,
             usePrimary: true
         )
-        let secondary = try self.predict(
+        let secondary = try await self.predict(
             from: store,
             provider: provider,
             lookbackHours: lookbackHours,
@@ -368,11 +368,11 @@ extension UsagePredictionEngine {
         from store: UsageHistoryStore,
         lookbackHours: Double = 24,
         forHoursAhead hours: Double = 1.0
-    ) throws -> [UsagePrediction] {
+    ) async throws -> [UsagePrediction] {
         var predictions: [UsagePrediction] = []
 
         for provider in UsageProvider.allCases {
-            if let prediction = try self.predict(
+            if let prediction = try await self.predict(
                 from: store,
                 provider: provider,
                 lookbackHours: lookbackHours,
@@ -390,13 +390,13 @@ extension UsagePredictionEngine {
         from store: UsageHistoryStore,
         lookbackHours: Double = 24,
         forHoursAhead hours: Double = 1.0
-    ) throws -> [String: ProviderPredictions] {
+    ) async throws -> [String: ProviderPredictions] {
         var predictions: [String: ProviderPredictions] = [:]
 
-        let activeProviders = try store.fetchActiveProviders()
+        let activeProviders = try await store.fetchActiveProviders()
         for providerName in activeProviders {
             guard let provider = UsageProvider(rawValue: providerName) else { continue }
-            let pred = try self.predictBoth(
+            let pred = try await self.predictBoth(
                 from: store,
                 provider: provider,
                 lookbackHours: lookbackHours,
