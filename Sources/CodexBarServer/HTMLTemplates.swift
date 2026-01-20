@@ -11,9 +11,7 @@ enum StaticFiles {
     static func get(_ path: String) -> String? {
         switch path {
         case "style.css":
-            // Keep the inlined CSS as authoritative for now.
-            // (The external `Resources/static/style.css` needs to stay in sync with the HTML templates.)
-            return Self.css
+            return AssetLoader.loadStaticText("style.css")
         case "app.js":
             return AssetLoader.loadStaticText("app.js")
         case "chart.umd.min.js":
@@ -1095,7 +1093,7 @@ enum DashboardPage {
                     <header>
                         <div class="header-left">
                             <h1>CodexBar</h1>
-                            <span class="subtitle">\(providerCount) provider\(providerCount == 1 ? "" : "s") · <button id="records-button" class="subtitle-link" type="button">\(recordCount) records</button></span>
+                            <span class="subtitle">\(providerCount) provider\(providerCount == 1 ? "" : "s") · <button id="records-button" class="subtitle-link" type="button" aria-label="View records history">\(recordCount) records</button></span>
                         </div>
                         <div class="header-controls">
                             <select id="autorefresh-select" class="refresh-select" title="Auto-refresh interval">
@@ -1129,9 +1127,9 @@ enum DashboardPage {
                         </div>
                     </footer>
                 </div>
-                <dialog id="records-dialog" class="modal">
+                <dialog id="records-dialog" class="modal" aria-labelledby="records-dialog-title">
                     <div class="modal-header">
-                        <div class="modal-title">Records</div>
+                        <div id="records-dialog-title" class="modal-title">Records</div>
                         <button id="records-close" class="modal-close" type="button" aria-label="Close">×</button>
                     </div>
                     <div class="modal-body">

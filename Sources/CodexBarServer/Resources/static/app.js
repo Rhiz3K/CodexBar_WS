@@ -438,7 +438,7 @@ function initRecordsModal() {
     const tbody = document.getElementById('records-tbody');
     const rawPre = document.getElementById('records-raw');
 
-    if (!button || !dialog || !tbody || !rawPre) return;
+    if (!button || !dialog || !closeButton || !tbody || !rawPre) return;
 
     let records = [];
     let selectedIndex = -1;
@@ -447,12 +447,28 @@ function initRecordsModal() {
         return typeof value === 'number' ? `${value.toFixed(1)}%` : '—';
     }
 
-    function setSelected(index) {
-        selectedIndex = index;
+    function setSelected(index, { focus = false } = {}) {
+        if (!records.length) {
+            selectedIndex = -1;
+            rawPre.textContent = 'No records.';
+            return;
+        }
+
+        selectedIndex = Math.min(Math.max(index, 0), records.length - 1);
+
+        let selectedRow = null;
 
         tbody.querySelectorAll('tr').forEach((row, i) => {
-            row.classList.toggle('selected', i === selectedIndex);
+            const isSelected = i === selectedIndex;
+            row.classList.toggle('selected', isSelected);
+            row.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+            row.tabIndex = isSelected ? 0 : -1;
+            if (isSelected) selectedRow = row;
         });
+
+        if (focus && selectedRow) {
+            selectedRow.focus();
+        }
 
         const record = records[selectedIndex];
         if (!record) {
@@ -479,7 +495,9 @@ function initRecordsModal() {
         const fragment = document.createDocumentFragment();
         records.forEach((record, index) => {
             const tr = document.createElement('tr');
-            tr.addEventListener('click', () => setSelected(index));
+            tr.dataset.index = String(index);
+            tr.tabIndex = -1;
+            tr.setAttribute('aria-selected', 'false');
 
             const timestamp = record.timestamp ? new Date(record.timestamp) : null;
 
@@ -516,7 +534,7 @@ function initRecordsModal() {
 
         tbody.appendChild(fragment);
 
-        setSelected(0);
+        setSelected(0, { focus: true });
     }
 
     async function loadRecords() {
@@ -526,23 +544,81 @@ function initRecordsModal() {
 
         try {
             const response = await fetch('/api/records?limit=200');
+            if (!response.ok) {
+                throw new Error(`HTTP error ${response.status} ${response.statusText}`);
+            }
             const payload = await response.json();
             records = payload.records || [];
             renderRows();
         } catch (error) {
             console.error('Failed to load records:', error);
+            records = [];
+            tbody.innerHTML = '';
             rawPre.textContent = 'Failed to load records.';
         }
     }
+
+    tbody.addEventListener('click', event => {
+        const row = event.target?.closest?.('tr');
+        if (!row || !tbody.contains(row)) return;
+        const index = parseInt(row.dataset.index || '', 10);
+        if (!Number.isFinite(index)) return;
+        setSelected(index, { focus: true });
+    });
+
+    tbody.addEventListener('keydown', event => {
+        if (!records.length) return;
+
+        const row = event.target?.closest?.('tr');
+        const rawIndex = row?.dataset?.index ?? '';
+        const currentIndex = rawIndex ? parseInt(rawIndex, 10) : selectedIndex;
+        if (!Number.isFinite(currentIndex)) return;
+
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setSelected(currentIndex + 1, { focus: true });
+            return;
+        }
+
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setSelected(currentIndex - 1, { focus: true });
+            return;
+        }
+
+        if (event.key === 'Home') {
+            event.preventDefault();
+            setSelected(0, { focus: true });
+            return;
+        }
+
+        if (event.key === 'End') {
+            event.preventDefault();
+            setSelected(records.length - 1, { focus: true });
+            return;
+        }
+
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setSelected(currentIndex, { focus: true });
+        }
+    });
 
     button.addEventListener('click', async () => {
         dialog.showModal();
         await loadRecords();
     });
 
-    closeButton?.addEventListener('click', () => dialog.close());
+    closeButton.addEventListener('click', () => dialog.close());
     dialog.addEventListener('click', event => {
         if (event.target === dialog) dialog.close();
+    });
+
+    dialog.addEventListener('keydown', event => {
+        if (event.key === 'Escape' || event.key === 'Esc') {
+            event.preventDefault();
+            dialog.close();
+        }
     });
 }
 

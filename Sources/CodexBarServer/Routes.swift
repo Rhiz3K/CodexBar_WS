@@ -462,11 +462,20 @@ func buildRouter(state: AppState) -> Router<BasicRequestContext> {
 
     // API: Get recent records (across all providers)
     router.get("/api/records") { request, _ -> Response in
-        let limit = request.uri.queryParameters.get("limit").flatMap(Int.init) ?? 200
         let providerName = request.uri.queryParameters.get("provider")
 
+        let requestedLimit = request.uri.queryParameters.get("limit").flatMap(Int.init) ?? 200
+        let maxLimit = 1000
+        let limit = min(max(requestedLimit, 1), maxLimit)
+
         let records: [UsageHistoryRecord]
-        if let providerName, let provider = UsageProvider(rawValue: providerName) {
+        if let providerName {
+            guard let provider = UsageProvider(rawValue: providerName) else {
+                return try jsonResponse(
+                    APIErrorResponse(error: "Unknown provider."),
+                    status: .badRequest
+                )
+            }
             records = try await state.store.fetchHistory(provider: provider, limit: limit)
         } else {
             records = try await state.store.fetchAllHistory(limit: limit)

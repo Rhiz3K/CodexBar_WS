@@ -172,6 +172,11 @@ header {
     background: rgba(88, 166, 255, 0.15);
 }
 
+.records-table tbody tr:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: -2px;
+}
+
 .records-detail {
     display: flex;
     flex-direction: column;
