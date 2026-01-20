@@ -73,6 +73,11 @@ function createUsageChart(canvasId, data) {
     const latestWeekly = weeklyData.length > 0 ? weeklyData[weeklyData.length - 1].y : null;
     const weeklyColor = getUsageColor(latestWeekly);
 
+    // Chart.js time scale formatting is independent from our reset-time formatting.
+    // Force the adapter to render 24h labels when the user selects 24H.
+    const hourFormat = use24HourFormat ? 'HH:mm' : 'h a';
+    const tooltipFormat = use24HourFormat ? 'MMM d, HH:mm' : 'MMM d, h:mm a';
+
     chartInstances[canvasId] = new Chart(ctx, {
         type: 'line',
         data: {
@@ -116,7 +121,13 @@ function createUsageChart(canvasId, data) {
             scales: {
                 x: {
                     type: 'time',
-                    time: { unit: 'hour' },
+                    time: {
+                        unit: 'hour',
+                        displayFormats: {
+                            hour: hourFormat,
+                        },
+                        tooltipFormat: tooltipFormat,
+                    },
                     grid: { color: '#30363d' },
                     ticks: { color: '#6e7681', maxTicksLimit: 4 },
                 },
