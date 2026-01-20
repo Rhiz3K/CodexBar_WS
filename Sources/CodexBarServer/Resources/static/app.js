@@ -423,12 +423,136 @@ function initPrivacyToggle() {
     }
 }
 
+function parseMaybeJSON(text) {
+    try {
+        return JSON.parse(text);
+    } catch {
+        return null;
+    }
+}
+
+function initRecordsModal() {
+    const button = document.getElementById('records-button');
+    const dialog = document.getElementById('records-dialog');
+    const closeButton = document.getElementById('records-close');
+    const tbody = document.getElementById('records-tbody');
+    const rawPre = document.getElementById('records-raw');
+
+    if (!button || !dialog || !tbody || !rawPre) return;
+
+    let records = [];
+    let selectedIndex = -1;
+
+    function formatPercent(value) {
+        return typeof value === 'number' ? `${value.toFixed(1)}%` : '—';
+    }
+
+    function setSelected(index) {
+        selectedIndex = index;
+
+        tbody.querySelectorAll('tr').forEach((row, i) => {
+            row.classList.toggle('selected', i === selectedIndex);
+        });
+
+        const record = records[selectedIndex];
+        if (!record) {
+            rawPre.textContent = '';
+            return;
+        }
+
+        if (record.rawJSON) {
+            const parsed = parseMaybeJSON(record.rawJSON);
+            rawPre.textContent = parsed ? JSON.stringify(parsed, null, 2) : record.rawJSON;
+        } else {
+            rawPre.textContent = JSON.stringify(record, null, 2);
+        }
+    }
+
+    function renderRows() {
+        tbody.innerHTML = '';
+
+        if (!records.length) {
+            rawPre.textContent = 'No records.';
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        records.forEach((record, index) => {
+            const tr = document.createElement('tr');
+            tr.addEventListener('click', () => setSelected(index));
+
+            const timestamp = record.timestamp ? new Date(record.timestamp) : null;
+
+            const tdTime = document.createElement('td');
+            tdTime.textContent = timestamp ? formatTimestamp(timestamp) : '—';
+            tdTime.title = timestamp ? formatAbsoluteTime(timestamp) : '';
+
+            const tdProvider = document.createElement('td');
+            tdProvider.textContent = record.provider || '—';
+
+            const tdSession = document.createElement('td');
+            tdSession.textContent = formatPercent(record.primaryUsedPercent);
+
+            const tdWeekly = document.createElement('td');
+            tdWeekly.textContent = formatPercent(record.secondaryUsedPercent);
+
+            const tdEmail = document.createElement('td');
+            const emailSpan = document.createElement('span');
+            emailSpan.className = 'email';
+            emailSpan.textContent = record.accountEmail || '—';
+            tdEmail.appendChild(emailSpan);
+
+            const tdSource = document.createElement('td');
+            tdSource.textContent = record.sourceLabel || '—';
+
+            tr.appendChild(tdTime);
+            tr.appendChild(tdProvider);
+            tr.appendChild(tdSession);
+            tr.appendChild(tdWeekly);
+            tr.appendChild(tdEmail);
+            tr.appendChild(tdSource);
+            fragment.appendChild(tr);
+        });
+
+        tbody.appendChild(fragment);
+
+        setSelected(0);
+    }
+
+    async function loadRecords() {
+        tbody.innerHTML = '';
+        rawPre.textContent = 'Loading…';
+        selectedIndex = -1;
+
+        try {
+            const response = await fetch('/api/records?limit=200');
+            const payload = await response.json();
+            records = payload.records || [];
+            renderRows();
+        } catch (error) {
+            console.error('Failed to load records:', error);
+            rawPre.textContent = 'Failed to load records.';
+        }
+    }
+
+    button.addEventListener('click', async () => {
+        dialog.showModal();
+        await loadRecords();
+    });
+
+    closeButton?.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', event => {
+        if (event.target === dialog) dialog.close();
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     initChartRangeButtons();
     initAutoRefresh();
     initTimeToggle();
     initPrivacyToggle();
     initModelFilters();
+    initRecordsModal();
 
     // Initial load
     refreshDashboard().finally(() => {

@@ -460,6 +460,21 @@ func buildRouter(state: AppState) -> Router<BasicRequestContext> {
         )
     }
 
+    // API: Get recent records (across all providers)
+    router.get("/api/records") { request, _ -> Response in
+        let limit = request.uri.queryParameters.get("limit").flatMap(Int.init) ?? 200
+        let providerName = request.uri.queryParameters.get("provider")
+
+        let records: [UsageHistoryRecord]
+        if let providerName, let provider = UsageProvider(rawValue: providerName) {
+            records = try await state.store.fetchHistory(provider: provider, limit: limit)
+        } else {
+            records = try await state.store.fetchAllHistory(limit: limit)
+        }
+
+        return try jsonResponse(APIRecordsResponse(records: records))
+    }
+
     // API: Get list of active providers (providers with data)
     router.get("/api/providers") { _, _ -> Response in
         let providers = try await state.store.fetchActiveProviders()
@@ -622,4 +637,8 @@ private struct APIHealthWarning: Codable, Sendable {
 
 private struct APIProvidersResponse: Codable, Sendable {
     let providers: [String]
+}
+
+private struct APIRecordsResponse: Codable, Sendable {
+    let records: [UsageHistoryRecord]
 }

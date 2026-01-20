@@ -92,6 +92,149 @@ enum StaticFiles {
         .header-left h1 { font-size: 20px; font-weight: 600; }
         .header-left .subtitle { color: var(--text-secondary); font-size: 14px; }
 
+        .subtitle-link {
+            background: transparent;
+            border: none;
+            color: inherit;
+            cursor: pointer;
+            padding: 0;
+            margin: 0;
+            font-size: inherit;
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
+
+        .subtitle-link:hover {
+            color: var(--text-primary);
+        }
+
+        .subtitle-link:focus-visible {
+            outline: 2px solid var(--accent-blue);
+            outline-offset: 2px;
+            border-radius: 2px;
+        }
+
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            padding: 0;
+            margin: auto;
+            width: min(1100px, calc(100vw - 48px));
+        }
+
+        .modal::backdrop {
+            background: rgba(0, 0, 0, 0.6);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+        }
+
+        .modal-title {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+        }
+
+        .modal-close:hover {
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+
+        .modal-body {
+            padding: 12px 16px 16px;
+            display: grid;
+            grid-template-columns: 1.5fr 1fr;
+            gap: 12px;
+        }
+
+        .records-table-wrap {
+            overflow: auto;
+            max-height: min(65vh, 520px);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-card);
+        }
+
+        .records-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .records-table th,
+        .records-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--border-color);
+            white-space: nowrap;
+            text-align: left;
+        }
+
+        .records-table th {
+            position: sticky;
+            top: 0;
+            background: var(--bg-secondary);
+            z-index: 1;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .records-table tbody tr {
+            cursor: pointer;
+        }
+
+        .records-table tbody tr:hover {
+            background: rgba(88, 166, 255, 0.08);
+        }
+
+        .records-table tbody tr.selected {
+            background: rgba(88, 166, 255, 0.15);
+        }
+
+        .records-detail {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .records-detail-title {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+
+        .records-raw {
+            flex: 1;
+            overflow: auto;
+            max-height: min(65vh, 520px);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-card);
+            padding: 10px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            font-size: 11px;
+            line-height: 1.4;
+            white-space: pre;
+        }
+
         .refresh-btn {
             background: var(--bg-tertiary);
             border: 1px solid var(--border-color);
@@ -432,6 +575,8 @@ enum StaticFiles {
                 grid-template-columns: 1fr;
             }
             .card { min-height: 320px; }
+            .modal-body { grid-template-columns: 1fr; }
+            .records-table-wrap, .records-raw { max-height: 40vh; }
         }
 
         @media (max-width: 600px) {
@@ -950,7 +1095,7 @@ enum DashboardPage {
                     <header>
                         <div class="header-left">
                             <h1>CodexBar</h1>
-                            <span class="subtitle">\(providerCount) provider\(providerCount == 1 ? "" : "s") · \(recordCount) records</span>
+                            <span class="subtitle">\(providerCount) provider\(providerCount == 1 ? "" : "s") · <button id="records-button" class="subtitle-link" type="button">\(recordCount) records</button></span>
                         </div>
                         <div class="header-controls">
                             <select id="autorefresh-select" class="refresh-select" title="Auto-refresh interval">
@@ -984,6 +1129,33 @@ enum DashboardPage {
                         </div>
                     </footer>
                 </div>
+                <dialog id="records-dialog" class="modal">
+                    <div class="modal-header">
+                        <div class="modal-title">Records</div>
+                        <button id="records-close" class="modal-close" type="button" aria-label="Close">×</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="records-table-wrap">
+                            <table class="records-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Provider</th>
+                                        <th>Session</th>
+                                        <th>Weekly</th>
+                                        <th>Email</th>
+                                        <th>Source</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="records-tbody"></tbody>
+                            </table>
+                        </div>
+                        <div class="records-detail">
+                            <div class="records-detail-title">Raw JSON</div>
+                            <pre id="records-raw" class="records-raw"></pre>
+                        </div>
+                    </div>
+                </dialog>
                 <script src="/static/app.js"></script>
             </body>
             </html>
