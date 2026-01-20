@@ -423,12 +423,212 @@ function initPrivacyToggle() {
     }
 }
 
+function parseMaybeJSON(text) {
+    try {
+        return JSON.parse(text);
+    } catch {
+        return null;
+    }
+}
+
+function initRecordsModal() {
+    const button = document.getElementById('records-button');
+    const dialog = document.getElementById('records-dialog');
+    const closeButton = document.getElementById('records-close');
+    const tbody = document.getElementById('records-tbody');
+    const rawPre = document.getElementById('records-raw');
+
+    if (!button || !dialog || !closeButton || !tbody || !rawPre) return;
+
+    let records = [];
+    let selectedIndex = -1;
+
+    function formatPercent(value) {
+        return typeof value === 'number' ? `${value.toFixed(1)}%` : '—';
+    }
+
+    function setSelected(index, { focus = false } = {}) {
+        if (!records.length) {
+            selectedIndex = -1;
+            rawPre.textContent = 'No records.';
+            return;
+        }
+
+        selectedIndex = Math.min(Math.max(index, 0), records.length - 1);
+
+        let selectedRow = null;
+
+        tbody.querySelectorAll('tr').forEach((row, i) => {
+            const isSelected = i === selectedIndex;
+            row.classList.toggle('selected', isSelected);
+            row.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+            row.tabIndex = isSelected ? 0 : -1;
+            if (isSelected) selectedRow = row;
+        });
+
+        if (focus && selectedRow) {
+            selectedRow.focus();
+        }
+
+        const record = records[selectedIndex];
+        if (!record) {
+            rawPre.textContent = '';
+            return;
+        }
+
+        if (record.rawJSON) {
+            const parsed = parseMaybeJSON(record.rawJSON);
+            rawPre.textContent = parsed ? JSON.stringify(parsed, null, 2) : record.rawJSON;
+        } else {
+            rawPre.textContent = JSON.stringify(record, null, 2);
+        }
+    }
+
+    function renderRows() {
+        tbody.innerHTML = '';
+
+        if (!records.length) {
+            rawPre.textContent = 'No records.';
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        records.forEach((record, index) => {
+            const tr = document.createElement('tr');
+            tr.dataset.index = String(index);
+            tr.tabIndex = -1;
+            tr.setAttribute('aria-selected', 'false');
+
+            const timestamp = record.timestamp ? new Date(record.timestamp) : null;
+
+            const tdTime = document.createElement('td');
+            tdTime.textContent = timestamp ? formatTimestamp(timestamp) : '—';
+            tdTime.title = timestamp ? formatAbsoluteTime(timestamp) : '';
+
+            const tdProvider = document.createElement('td');
+            tdProvider.textContent = record.provider || '—';
+
+            const tdSession = document.createElement('td');
+            tdSession.textContent = formatPercent(record.primaryUsedPercent);
+
+            const tdWeekly = document.createElement('td');
+            tdWeekly.textContent = formatPercent(record.secondaryUsedPercent);
+
+            const tdEmail = document.createElement('td');
+            const emailSpan = document.createElement('span');
+            emailSpan.className = 'email';
+            emailSpan.textContent = record.accountEmail || '—';
+            tdEmail.appendChild(emailSpan);
+
+            const tdSource = document.createElement('td');
+            tdSource.textContent = record.sourceLabel || '—';
+
+            tr.appendChild(tdTime);
+            tr.appendChild(tdProvider);
+            tr.appendChild(tdSession);
+            tr.appendChild(tdWeekly);
+            tr.appendChild(tdEmail);
+            tr.appendChild(tdSource);
+            fragment.appendChild(tr);
+        });
+
+        tbody.appendChild(fragment);
+
+        setSelected(0, { focus: true });
+    }
+
+    async function loadRecords() {
+        tbody.innerHTML = '';
+        rawPre.textContent = 'Loading…';
+        selectedIndex = -1;
+
+        try {
+            const response = await fetch('/api/records?limit=200');
+            if (!response.ok) {
+                throw new Error(`HTTP error ${response.status} ${response.statusText}`);
+            }
+            const payload = await response.json();
+            records = payload.records || [];
+            renderRows();
+        } catch (error) {
+            console.error('Failed to load records:', error);
+            records = [];
+            tbody.innerHTML = '';
+            rawPre.textContent = 'Failed to load records.';
+        }
+    }
+
+    tbody.addEventListener('click', event => {
+        const row = event.target?.closest?.('tr');
+        if (!row || !tbody.contains(row)) return;
+        const index = parseInt(row.dataset.index || '', 10);
+        if (!Number.isFinite(index)) return;
+        setSelected(index, { focus: true });
+    });
+
+    tbody.addEventListener('keydown', event => {
+        if (!records.length) return;
+
+        const row = event.target?.closest?.('tr');
+        const rawIndex = row?.dataset?.index ?? '';
+        const currentIndex = rawIndex ? parseInt(rawIndex, 10) : selectedIndex;
+        if (!Number.isFinite(currentIndex)) return;
+
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setSelected(currentIndex + 1, { focus: true });
+            return;
+        }
+
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setSelected(currentIndex - 1, { focus: true });
+            return;
+        }
+
+        if (event.key === 'Home') {
+            event.preventDefault();
+            setSelected(0, { focus: true });
+            return;
+        }
+
+        if (event.key === 'End') {
+            event.preventDefault();
+            setSelected(records.length - 1, { focus: true });
+            return;
+        }
+
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setSelected(currentIndex, { focus: true });
+        }
+    });
+
+    button.addEventListener('click', async () => {
+        dialog.showModal();
+        await loadRecords();
+    });
+
+    closeButton.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', event => {
+        if (event.target === dialog) dialog.close();
+    });
+
+    dialog.addEventListener('keydown', event => {
+        if (event.key === 'Escape' || event.key === 'Esc') {
+            event.preventDefault();
+            dialog.close();
+        }
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     initChartRangeButtons();
     initAutoRefresh();
     initTimeToggle();
     initPrivacyToggle();
     initModelFilters();
+    initRecordsModal();
 
     // Initial load
     refreshDashboard().finally(() => {

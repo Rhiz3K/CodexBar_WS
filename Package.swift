@@ -71,7 +71,12 @@ let package = Package(
                 ]),
             .testTarget(
                 name: "CodexBarLinuxTests",
-                dependencies: ["CodexBarCore", "CodexBarCLI"],
+                dependencies: [
+                    "CodexBarCore",
+                    "CodexBarCLI",
+                    "CodexBarServer",
+                    .product(name: "HummingbirdTesting", package: "hummingbird"),
+                ],
                 path: "TestsLinux",
                 swiftSettings: [
                     .enableUpcomingFeature("StrictConcurrency"),
