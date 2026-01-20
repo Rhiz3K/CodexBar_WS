@@ -159,7 +159,11 @@ async function fetchHistory(provider, hours = 24) {
 async function refreshDashboard() {
     try {
         const status = await fetchStatus();
-        const providers = status.providers;
+        // Older server versions returned a map: { providers: { claude: {...}, codex: {...} } }
+        // Newer server versions return an array: { providers: [{ provider: "claude", ... }, ...] }
+        const providers = Array.isArray(status.providers)
+            ? Object.fromEntries(status.providers.map(p => [p.provider, p]))
+            : status.providers;
 
         // Update last update timestamp
         const lastUpdate = document.getElementById('last-update');
