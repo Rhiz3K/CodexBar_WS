@@ -1117,7 +1117,7 @@ enum DashboardPage {
 
                     <footer class="footer">
                         <div></div>
-                        <div class="footer-center">CodexBar Server v\(CodexBarServer.version) · Last update: <span id="last-update" data-timestamp="\(ISO8601DateFormatter().string(from: Date()))">\(Self.formatDate(Date()))</span></div>
+                        <div class="footer-center">\(CodexBarBuildInfo.versionString.map { "CodexBar v\($0) · " } ?? "")CodexBar Server v\(CodexBarServer.version) · Last update: <span id="last-update" data-timestamp="\(ISO8601DateFormatter().string(from: Date()))">\(Self.formatDate(Date()))</span></div>
                         <div class="footer-controls">
                             <button id="timeformat-toggle" class="footer-control" title="Toggle 12H/24H time format">12H</button>
                             <button id="privacy-toggle" class="footer-control" title="Toggle email visibility">
