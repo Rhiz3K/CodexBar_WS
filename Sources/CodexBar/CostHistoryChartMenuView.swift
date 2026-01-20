@@ -83,7 +83,9 @@ struct CostHistoryChartMenuView: View {
                         }
                     }
 
-                    ChartDateRangeFooterView(startDate: model.dateRange.start, endDate: model.dateRange.end)
+                    if let dateRange = model.dateRange {
+                        ChartDateRangeFooterView(startDate: dateRange.start, endDate: dateRange.end)
+                    }
                 }
 
                 let detail = self.detailLines(model: model)
@@ -121,7 +123,7 @@ struct CostHistoryChartMenuView: View {
         let entriesByDateKey: [String: DailyEntry]
         let dateKeys: [(key: String, date: Date)]
         let barColor: Color
-        let dateRange: (start: Date, end: Date)
+        let dateRange: (start: Date, end: Date)?
         let peakKey: String?
         let maxCostUSD: Double
     }
