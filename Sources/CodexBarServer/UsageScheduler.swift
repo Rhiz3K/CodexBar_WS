@@ -15,8 +15,42 @@ struct ProviderCostData: Sendable {
     let sessionCostUSD: Double?
     let last30DaysTokens: Int?
     let last30DaysCostUSD: Double?
+    let daily: [ProviderCostDaily]
     let modelsUsed: [String]
     let updatedAt: Date
+}
+
+struct ProviderCostDaily: Sendable {
+    let date: String
+    let totalTokens: Int?
+    let totalCostUSD: Double?
+    let modelBreakdowns: [ProviderCostModelBreakdown]
+}
+
+struct ProviderCostModelBreakdown: Sendable {
+    let modelName: String
+    let costUSD: Double
+}
+
+// MARK: - Scheduler Diagnostics
+
+enum SchedulerWarningKind: String, Sendable {
+    case usage
+    case cost
+}
+
+struct SchedulerWarning: Sendable {
+    let kind: SchedulerWarningKind
+    let providers: String
+    let source: String
+    let message: String
+    let lastSeenAt: Date
+}
+
+private struct SchedulerWarningKey: Hashable, Sendable {
+    let kind: SchedulerWarningKind
+    let providers: String
+    let source: String
 }
 
 /// Scheduler that periodically fetches usage via CodexBarCLI
@@ -28,6 +62,7 @@ actor UsageScheduler {
     private var task: Task<Void, Never>?
     private var isRunning = false
     private var costData: [String: ProviderCostData] = [:]
+    private var warningMap: [SchedulerWarningKey: SchedulerWarning] = [:]
 
     init(
         store: UsageHistoryStore,
@@ -105,6 +140,11 @@ actor UsageScheduler {
         return self.costData[provider]
     }
 
+    func getWarnings() -> [SchedulerWarning] {
+        Array(self.warningMap.values)
+            .sorted { $0.lastSeenAt > $1.lastSeenAt }
+    }
+
     // MARK: - CodexBarCLI Integration
 
     private func fetchViaCodexBarCLI() async {
@@ -150,13 +190,32 @@ actor UsageScheduler {
                     timeout: 120
                 )
 
-                // Log any errors from CLI (but continue - partial results may be available)
-                if result.exitCode != 0 {
-                    if let stderr = result.stderr, !stderr.isEmpty {
-                        for line in stderr.split(separator: "\n") where line.hasPrefix("Error:") {
-                            self.logger.debug("CLI [\(config.source)]: \(line)")
-                        }
+                // Log any errors from CLI (but continue - partial results may be available).
+                let stderr = result.stderr ?? ""
+                let errorLines = stderr
+                    .split(separator: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { $0.hasPrefix("Error:") }
+
+                if let first = errorLines.first {
+                    self.recordWarning(
+                        kind: .usage,
+                        providers: config.providers,
+                        source: config.source,
+                        message: first
+                    )
+                    for line in errorLines {
+                        self.logger.debug("CLI [\(config.source)]: \(line)")
                     }
+                } else if result.exitCode == 0 {
+                    self.clearWarning(kind: .usage, providers: config.providers, source: config.source)
+                } else {
+                    self.recordWarning(
+                        kind: .usage,
+                        providers: config.providers,
+                        source: config.source,
+                        message: "Exit code \(result.exitCode)"
+                    )
                 }
 
                 if let stdout = result.stdout, !stdout.isEmpty {
@@ -165,6 +224,12 @@ actor UsageScheduler {
                     }
                 }
             } catch {
+                self.recordWarning(
+                    kind: .usage,
+                    providers: config.providers,
+                    source: config.source,
+                    message: error.localizedDescription
+                )
                 self.logger.warning("Fetch [\(config.source)] failed: \(error.localizedDescription)")
             }
         }
@@ -211,8 +276,13 @@ actor UsageScheduler {
 
                 if result.exitCode != 0 {
                     self.logger.debug("Cost [\(provider)] exit code: \(result.exitCode)")
-                    if let stderr = result.stderr, !stderr.isEmpty {
+                    let stderr = result.stderr ?? ""
+                    if !stderr.isEmpty {
+                        let message = String(stderr.prefix(200))
+                        self.recordWarning(kind: .cost, providers: provider, source: "cost", message: message)
                         self.logger.debug("Cost [\(provider)] stderr: \(stderr.prefix(200))")
+                    } else {
+                        self.recordWarning(kind: .cost, providers: provider, source: "cost", message: "Exit code \(result.exitCode)")
                     }
                     continue
                 }
@@ -236,19 +306,33 @@ actor UsageScheduler {
                                     periodDays: 30,
                                     modelsUsed: cost.modelsUsed
                                 )
+
+                                for daily in cost.daily {
+                                    try await self.store.upsertCostDaily(
+                                        provider: cost.provider,
+                                        date: daily.date,
+                                        totalTokens: daily.totalTokens,
+                                        totalCostUSD: daily.totalCostUSD
+                                    )
+                                }
+
                                 self.logger.debug("[\(cost.provider)] cost persisted to database")
                             } catch {
                                 self.logger.warning("[\(cost.provider)] failed to persist cost: \(error.localizedDescription)")
                             }
                         }
+
+                        self.clearWarning(kind: .cost, providers: provider, source: "cost")
                     } catch {
+                        self.recordWarning(kind: .cost, providers: provider, source: "cost", message: "Parse error: \(error.localizedDescription)")
                         self.logger.warning("Cost [\(provider)] parse error: \(error.localizedDescription)")
                     }
                 } else {
                     self.logger.debug("Cost [\(provider)] empty output")
                 }
             } catch {
-                self.logger.debug("Cost fetch [\(provider)] failed: \(error.localizedDescription)")
+                self.recordWarning(kind: .cost, providers: provider, source: "cost", message: error.localizedDescription)
+                self.logger.warning("Cost fetch [\(provider)] failed: \(error.localizedDescription)")
             }
         }
     }
@@ -268,22 +352,70 @@ actor UsageScheduler {
         for json in jsonArray {
             guard let provider = json["provider"] as? String else { continue }
 
-            // Extract models from daily entries
+            let dailyJSON = json["daily"] as? [[String: Any]] ?? []
             var allModels: Set<String> = []
-            if let daily = json["daily"] as? [[String: Any]] {
-                for entry in daily {
-                    if let models = entry["modelsUsed"] as? [String] {
-                        allModels.formUnion(models)
+            var daily: [ProviderCostDaily] = []
+
+            for entry in dailyJSON {
+                if let models = entry["modelsUsed"] as? [String] {
+                    allModels.formUnion(models)
+                }
+
+                let date = entry["date"] as? String ?? ""
+                let rawTotalTokens = entry["totalTokens"] as? Int
+                let rawTotalCostUSD = entry["totalCost"] as? Double
+
+                // Claude includes cacheRead/cacheCreation tokens which makes totalTokens enormous.
+                // For dashboard display we use input+output tokens instead.
+                let totalTokens: Int?
+                if provider == "claude",
+                   let inputTokens = entry["inputTokens"] as? Int,
+                   let outputTokens = entry["outputTokens"] as? Int
+                {
+                    totalTokens = inputTokens + outputTokens
+                } else {
+                    totalTokens = rawTotalTokens
+                }
+
+                var breakdowns: [ProviderCostModelBreakdown] = []
+                if let modelBreakdowns = entry["modelBreakdowns"] as? [[String: Any]] {
+                    for breakdown in modelBreakdowns {
+                        guard let modelName = breakdown["modelName"] as? String,
+                              let costUSD = breakdown["cost"] as? Double
+                        else {
+                            continue
+                        }
+                        breakdowns.append(ProviderCostModelBreakdown(modelName: modelName, costUSD: costUSD))
                     }
+                }
+
+                if !date.isEmpty {
+                    daily.append(
+                        ProviderCostDaily(
+                            date: date,
+                            totalTokens: totalTokens,
+                            totalCostUSD: rawTotalCostUSD,
+                            modelBreakdowns: breakdowns
+                        )
+                    )
                 }
             }
 
+            // Prefer derived totals from the daily list.
+            let sortedDaily = daily.sorted { $0.date < $1.date }
+            let sessionTokens = sortedDaily.last?.totalTokens
+            let sessionCostUSD = sortedDaily.last?.totalCostUSD
+
+            let last30DaysTokens = sortedDaily.reduce(0) { $0 + ($1.totalTokens ?? 0) }
+            let last30DaysCostUSD = sortedDaily.reduce(0.0) { $0 + ($1.totalCostUSD ?? 0.0) }
+
             let cost = ProviderCostData(
                 provider: provider,
-                sessionTokens: json["sessionTokens"] as? Int,
-                sessionCostUSD: json["sessionCostUSD"] as? Double,
-                last30DaysTokens: json["last30DaysTokens"] as? Int,
-                last30DaysCostUSD: json["last30DaysCostUSD"] as? Double,
+                sessionTokens: sessionTokens,
+                sessionCostUSD: sessionCostUSD,
+                last30DaysTokens: sortedDaily.isEmpty ? nil : last30DaysTokens,
+                last30DaysCostUSD: sortedDaily.isEmpty ? nil : last30DaysCostUSD,
+                daily: daily,
                 modelsUsed: Array(allModels).sorted(),
                 updatedAt: Date()
             )
@@ -397,67 +529,96 @@ actor UsageScheduler {
         let stderr: String?
     }
 
+    private func recordWarning(kind: SchedulerWarningKind, providers: String, source: String, message: String) {
+        let key = SchedulerWarningKey(kind: kind, providers: providers, source: source)
+        self.warningMap[key] = SchedulerWarning(
+            kind: kind,
+            providers: providers,
+            source: source,
+            message: message,
+            lastSeenAt: Date()
+        )
+    }
+
+    private func clearWarning(kind: SchedulerWarningKind, providers: String, source: String) {
+        let key = SchedulerWarningKey(kind: kind, providers: providers, source: source)
+        self.warningMap[key] = nil
+    }
+
     private func runCLI(path: String, arguments: [String], timeout: TimeInterval) async throws -> CLIResult {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = arguments
+        // `Process.waitUntilExit()` is blocking and would stall the actor, which in turn stalls
+        // HTTP handlers awaiting scheduler data (e.g. the dashboard `/` route).
+        // Run the process on a detached task so the actor remains responsive.
+        try await Self.runCLIProcess(path: path, arguments: arguments, timeout: timeout)
+    }
 
-            // Filter environment to only include necessary variables (security)
-            let fullEnv = ProcessInfo.processInfo.environment
-            let allowedKeys: Set<String> = [
-                // Core execution
-                "PATH", "HOME", "SHELL", "USER", "LOGNAME", "LANG", "LC_ALL", "TERM",
-                // Proxy settings
-                "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy",
-                // Provider API keys
-                "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
-                "GOOGLE_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY",
-            ]
-            let allowedPrefixes = ["OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "CODEX_", "CLAUDE_"]
+    private nonisolated static func runCLIProcess(
+        path: String,
+        arguments: [String],
+        timeout: TimeInterval
+    ) async throws -> CLIResult {
+        try await Task.detached(priority: .utility) {
+            try await withCheckedThrowingContinuation { continuation in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: path)
+                process.arguments = arguments
 
-            var env: [String: String] = [:]
-            for (key, value) in fullEnv {
-                if allowedKeys.contains(key) || allowedPrefixes.contains(where: { key.hasPrefix($0) }) {
-                    env[key] = value
+                // Filter environment to only include necessary variables (security)
+                let fullEnv = ProcessInfo.processInfo.environment
+                let allowedKeys: Set<String> = [
+                    // Core execution
+                    "PATH", "HOME", "SHELL", "USER", "LOGNAME", "LANG", "LC_ALL", "TERM",
+                    // Proxy settings
+                    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy",
+                    // Provider API keys
+                    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+                    "GOOGLE_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY",
+                ]
+                let allowedPrefixes = ["OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "CODEX_", "CLAUDE_"]
+
+                var env: [String: String] = [:]
+                for (key, value) in fullEnv {
+                    if allowedKeys.contains(key) || allowedPrefixes.contains(where: { key.hasPrefix($0) }) {
+                        env[key] = value
+                    }
+                }
+                env["NO_COLOR"] = "1" // Disable ANSI colors
+                process.environment = env
+
+                let stdoutPipe = Pipe()
+                let stderrPipe = Pipe()
+                process.standardOutput = stdoutPipe
+                process.standardError = stderrPipe
+
+                // Timeout handling
+                let timeoutTask = Task {
+                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    if process.isRunning {
+                        process.terminate()
+                    }
+                }
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    timeoutTask.cancel()
+
+                    let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                    let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+
+                    let result = CLIResult(
+                        exitCode: process.terminationStatus,
+                        stdout: String(data: stdoutData, encoding: .utf8),
+                        stderr: String(data: stderrData, encoding: .utf8)
+                    )
+
+                    continuation.resume(returning: result)
+                } catch {
+                    timeoutTask.cancel()
+                    continuation.resume(throwing: error)
                 }
             }
-            env["NO_COLOR"] = "1" // Disable ANSI colors
-            process.environment = env
-
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
-
-            // Timeout handling
-            let timeoutTask = Task {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                if process.isRunning {
-                    process.terminate()
-                }
-            }
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-                timeoutTask.cancel()
-
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-                let result = CLIResult(
-                    exitCode: process.terminationStatus,
-                    stdout: String(data: stdoutData, encoding: .utf8),
-                    stderr: String(data: stderrData, encoding: .utf8)
-                )
-
-                continuation.resume(returning: result)
-            } catch {
-                timeoutTask.cancel()
-                continuation.resume(throwing: error)
-            }
-        }
+        }.value
     }
 }
 

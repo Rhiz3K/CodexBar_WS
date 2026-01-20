@@ -59,6 +59,12 @@ struct CodexBarServer: AsyncParsableCommand {
 
         let store = try UsageHistoryStore(path: config.databasePath)
         let recordCount = (try? await store.recordCount()) ?? 0
+
+        do {
+            try await store.backfillUsageHourly()
+        } catch {
+            logger.warning("Hourly usage backfill failed: \(error.localizedDescription)")
+        }
         logger.info("Database initialized with \(recordCount) records")
 
         let appState = AppState(store: store, config: config, logger: logger)
@@ -135,5 +141,9 @@ final class AppState: Sendable {
 
     func getCostData(for provider: String) async -> ProviderCostData? {
         await self.scheduler.getCostData(for: provider)
+    }
+
+    func getWarnings() async -> [SchedulerWarning] {
+        await self.scheduler.getWarnings()
     }
 }

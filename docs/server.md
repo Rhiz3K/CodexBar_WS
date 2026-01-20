@@ -121,7 +121,7 @@ The server uses CodexBarCLI to fetch data. Configure providers as you would for 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/fetch` | POST | Trigger immediate data fetch |
-| `/health` | GET | Health check with record counts |
+| `/health` | GET | Health check with record counts + scheduler warnings |
 
 ## API Examples
 
@@ -140,7 +140,8 @@ curl -X POST http://127.0.0.1:8080/api/fetch
 
 # Health check
 curl http://127.0.0.1:8080/health
-# {"status":"ok","records":114,"costRecords":4}
+# {"status":"ok","records":114,"costRecords":4,"warnings":[]}
+# If the scheduler hits provider errors (e.g. expired OAuth token), status will be "warning" and warnings will contain details.
 ```
 
 ## Database Schema

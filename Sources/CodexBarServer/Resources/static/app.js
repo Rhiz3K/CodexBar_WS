@@ -66,8 +66,9 @@ function createUsageChart(canvasId, data) {
         chartInstances[canvasId].destroy();
     }
 
-    const sessionData = data.map(d => ({ x: new Date(d.timestamp), y: d.primaryUsage }));
-    const weeklyData = data.map(d => ({ x: new Date(d.timestamp), y: d.secondaryUsage }));
+    const sorted = [...data].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const sessionData = sorted.map(d => ({ x: new Date(d.timestamp), y: d.primaryUsage }));
+    const weeklyData = sorted.map(d => ({ x: new Date(d.timestamp), y: d.secondaryUsage }));
 
     const latestWeekly = weeklyData.length > 0 ? weeklyData[weeklyData.length - 1].y : null;
     const weeklyColor = getUsageColor(latestWeekly);
@@ -139,8 +140,8 @@ async function fetchStatus() {
     return response.json();
 }
 
-async function fetchHistory(provider) {
-    const response = await fetch(`/api/history/${provider}?hours=24&limit=200`);
+async function fetchHistory(provider, hours = 24) {
+    const response = await fetch(`/api/history/${provider}?hours=${hours}&limit=200`);
     return response.json();
 }
 
@@ -203,9 +204,12 @@ async function refreshDashboard() {
                 prediction.textContent = timeToLimit || '—';
             }
 
-            // Refresh chart data
-            const history = await fetchHistory(providerName);
+            const hours = getGlobalChartHours();
+
+            const history = await fetchHistory(providerName, hours);
             createUsageChart(`chart-${providerName}`, history.data);
+
+            // Period stats removed; timeline buttons are in the chart header.
         }
     } catch (error) {
         console.error('Refresh failed:', error);
@@ -224,6 +228,62 @@ async function triggerFetch() {
         if (button) button.disabled = false;
     }
 }
+
+function updateResetCountdowns() {
+    document.querySelectorAll('.reset-time[data-reset-at]').forEach(el => {
+        const raw = el.getAttribute('data-reset-at') || '';
+        if (!raw.trim()) {
+            el.textContent = '—';
+            el.title = '';
+            return;
+        }
+
+        const date = new Date(raw);
+        if (Number.isNaN(date.getTime())) {
+            el.textContent = '—';
+            el.title = '';
+            return;
+        }
+
+        el.textContent = formatRelativeTime(date);
+        el.title = formatAbsoluteTime(date);
+    });
+}
+
+function getGlobalChartHours() {
+    const raw = localStorage.getItem('chartHours');
+    const parsed = raw ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) ? parsed : 24;
+}
+
+function setGlobalChartHours(hours) {
+    localStorage.setItem('chartHours', String(hours));
+}
+
+function setActiveChartButtons(hours) {
+    document.querySelectorAll('.chart-period-btns').forEach(group => {
+        group.querySelectorAll('.chart-period-btn').forEach(b => b.classList.remove('active'));
+        const match = group.querySelector(`.chart-period-btn[data-hours="${hours}"]`);
+        if (match) match.classList.add('active');
+    });
+}
+
+function initChartRangeButtons() {
+    // Restore from localStorage.
+    setActiveChartButtons(getGlobalChartHours());
+
+    document.querySelectorAll('.chart-period-btns').forEach(group => {
+        group.querySelectorAll('.chart-period-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const hours = parseInt(btn.dataset.hours || '24', 10);
+                setGlobalChartHours(hours);
+                setActiveChartButtons(hours);
+                await refreshDashboard();
+            });
+        });
+    });
+}
+
 
 function initAutoRefresh() {
     const select = document.getElementById('autorefresh-select');
@@ -271,6 +331,59 @@ function initTimeToggle() {
     }
 }
 
+function initModelFilters() {
+    document.querySelectorAll('.model-tag[data-provider][data-model]').forEach(tag => {
+        tag.addEventListener('click', async () => {
+            const provider = tag.dataset.provider;
+            const model = tag.dataset.model;
+
+            const card = document.querySelector(`[data-provider="${provider}"]`);
+            if (!card) return;
+
+            const isAll = tag.dataset.all === '1' || model === '';
+
+            // Visual toggle (single-select)
+            card.querySelectorAll('.model-tag').forEach(el => el.classList.remove('active'));
+            tag.classList.add('active');
+
+            const next = isAll ? '' : model;
+            card.dataset.activeModel = next;
+
+            await refreshModelFilteredCost(provider, next);
+        });
+    });
+}
+
+async function refreshModelFilteredCost(provider, model) {
+    // Fetch per-model totals from the latest cost snapshot.
+    const response = await fetch(`/api/cost/models/${provider}`);
+    const payload = await response.json();
+
+    const card = document.querySelector(`[data-provider="${provider}"]`);
+    if (!card) return;
+
+    // Only update the existing Today/30d cost boxes if a model is selected.
+    // (We don't have per-model tokens today, only cost.)
+    const statValues = card.querySelectorAll('.stats-row .stat-value');
+    if (!statValues || statValues.length < 4) return;
+
+    if (!model) {
+        // Reset to server-rendered values by triggering a full refresh.
+        await refreshDashboard();
+        return;
+    }
+
+    const models = payload.models || [];
+    const match = models.find(m => m.model === model);
+
+    // Today tokens/cost and 30d tokens/cost are not per-model from DB at the moment.
+    // Show model cost as a hint in the 'Today cost' slot.
+    if (match && typeof match.costUSD === 'number') {
+        statValues[1].textContent = `$${match.costUSD.toFixed(2)}`;
+        // Keep labels stable; don't inject model name into UI.
+    }
+}
+
 function initPrivacyToggle() {
     const toggle = document.getElementById('privacy-toggle');
 
@@ -300,24 +413,24 @@ function initPrivacyToggle() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    initChartRangeButtons();
     initAutoRefresh();
     initTimeToggle();
     initPrivacyToggle();
-
-    const refreshButton = document.querySelector('.refresh-btn');
-    if (refreshButton) {
-        refreshButton.addEventListener('click', triggerFetch);
-    }
+    initModelFilters();
 
     // Initial load
-    refreshDashboard();
+    refreshDashboard().finally(() => {
+        updateResetCountdowns();
+    });
 
-    // Update timestamp every minute
+    // Update countdown + timestamp periodically
     setInterval(() => {
         const lastUpdate = document.getElementById('last-update');
         if (lastUpdate?.dataset.timestamp) {
             const timestamp = new Date(lastUpdate.dataset.timestamp);
             lastUpdate.textContent = formatTimestamp(timestamp);
         }
+        updateResetCountdowns();
     }, 60000);
 });

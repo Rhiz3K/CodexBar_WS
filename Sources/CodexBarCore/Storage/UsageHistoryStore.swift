@@ -14,7 +14,7 @@ public actor UsageHistoryStore {
     private let handle: SQLiteHandle
     private var db: OpaquePointer? { self.handle.db }
 
-    private static let schemaVersion = 3
+    private static let schemaVersion = 5
 
     public init(path: String? = nil) throws {
         if let path = path {
@@ -127,6 +127,29 @@ public actor UsageHistoryStore {
             CREATE INDEX IF NOT EXISTS idx_cost_timestamp
                 ON cost_history(timestamp DESC);
 
+            CREATE TABLE IF NOT EXISTS cost_daily (
+                provider TEXT NOT NULL,
+                date TEXT NOT NULL,
+                total_tokens INTEGER,
+                total_cost_usd REAL,
+                PRIMARY KEY (provider, date)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_cost_daily_provider_date
+                ON cost_daily(provider, date DESC);
+
+            CREATE TABLE IF NOT EXISTS usage_hourly (
+                provider TEXT NOT NULL,
+                hour_start INTEGER NOT NULL,
+                primary_used_percent REAL,
+                secondary_used_percent REAL,
+                tertiary_used_percent REAL,
+                PRIMARY KEY (provider, hour_start)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_usage_hourly_provider_hour
+                ON usage_hourly(provider, hour_start DESC);
+
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
                 value TEXT
@@ -218,6 +241,49 @@ public actor UsageHistoryStore {
                     ON cost_history(timestamp DESC);
                 """
             for statement in createCostSQL.split(separator: ";") {
+                let trimmed = statement.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                sqlite3_exec(db, trimmed + ";", nil, nil, nil)
+            }
+        }
+
+        // Migration from v3 to v4: add cost_daily table
+        if oldVersion < 4 {
+            let createDailySQL = """
+                CREATE TABLE IF NOT EXISTS cost_daily (
+                    provider TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    total_tokens INTEGER,
+                    total_cost_usd REAL,
+                    PRIMARY KEY (provider, date)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_cost_daily_provider_date
+                    ON cost_daily(provider, date DESC);
+                """
+            for statement in createDailySQL.split(separator: ";") {
+                let trimmed = statement.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                sqlite3_exec(db, trimmed + ";", nil, nil, nil)
+            }
+        }
+
+        // Migration from v4 to v5: add usage_hourly table
+        if oldVersion < 5 {
+            let createHourlySQL = """
+                CREATE TABLE IF NOT EXISTS usage_hourly (
+                    provider TEXT NOT NULL,
+                    hour_start INTEGER NOT NULL,
+                    primary_used_percent REAL,
+                    secondary_used_percent REAL,
+                    tertiary_used_percent REAL,
+                    PRIMARY KEY (provider, hour_start)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_usage_hourly_provider_hour
+                    ON usage_hourly(provider, hour_start DESC);
+                """
+            for statement in createHourlySQL.split(separator: ";") {
                 let trimmed = statement.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
                 sqlite3_exec(db, trimmed + ";", nil, nil, nil)
@@ -359,10 +425,125 @@ public actor UsageHistoryStore {
             guard sqlite3_step(stmt) == SQLITE_DONE else {
                 throw UsageHistoryError.insertFailed(self.lastErrorMessage())
             }
+
+            try self.upsertUsageHourly(
+                provider: record.provider,
+                timestamp: record.timestamp,
+                primaryUsedPercent: record.primaryUsedPercent,
+                secondaryUsedPercent: record.secondaryUsedPercent,
+                tertiaryUsedPercent: record.tertiaryUsedPercent
+            )
+        }
+    }
+
+    public func backfillUsageHourly() throws {
+        try self.queue.sync {
+            let sql = """
+                INSERT OR REPLACE INTO usage_hourly (provider, hour_start, primary_used_percent, secondary_used_percent, tertiary_used_percent)
+                SELECT
+                    provider,
+                    (timestamp / 3600) * 3600 AS hour_start,
+                    primary_used_percent,
+                    secondary_used_percent,
+                    tertiary_used_percent
+                FROM usage_history
+                """
+
+            var errorMessage: UnsafeMutablePointer<CChar>?
+            let result = sqlite3_exec(self.db, sql, nil, nil, &errorMessage)
+            if result != SQLITE_OK {
+                let message = errorMessage.map { String(cString: $0) } ?? "Unknown error"
+                sqlite3_free(errorMessage)
+                throw UsageHistoryError.queryFailed(message)
+            }
+        }
+    }
+
+    private func upsertUsageHourly(
+        provider: String,
+        timestamp: Date,
+        primaryUsedPercent: Double?,
+        secondaryUsedPercent: Double?,
+        tertiaryUsedPercent: Double?
+    ) throws {
+        let calendar = Calendar(identifier: .gregorian)
+        let hourStart = calendar.dateInterval(of: .hour, for: timestamp)?.start ?? timestamp
+        let hourStartTS = Int64(hourStart.timeIntervalSince1970)
+
+        let sql = """
+            INSERT INTO usage_hourly (provider, hour_start, primary_used_percent, secondary_used_percent, tertiary_used_percent)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(provider, hour_start) DO UPDATE SET
+                primary_used_percent = excluded.primary_used_percent,
+                secondary_used_percent = excluded.secondary_used_percent,
+                tertiary_used_percent = excluded.tertiary_used_percent
+            """
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw UsageHistoryError.prepareFailed(self.lastErrorMessage())
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_text(stmt, 1, provider, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_int64(stmt, 2, hourStartTS)
+        self.bindOptionalDouble(stmt, 3, primaryUsedPercent)
+        self.bindOptionalDouble(stmt, 4, secondaryUsedPercent)
+        self.bindOptionalDouble(stmt, 5, tertiaryUsedPercent)
+
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw UsageHistoryError.insertFailed(self.lastErrorMessage())
         }
     }
 
     // MARK: - Query Records
+
+    public func fetchHourlyHistory(
+        provider: UsageProvider,
+        limit: Int = 500,
+        since: Date? = nil
+    ) throws -> [(timestamp: Date, primaryUsage: Double?, secondaryUsage: Double?, tertiaryUsage: Double?)] {
+        try self.queue.sync {
+            var sql = """
+                SELECT hour_start, primary_used_percent, secondary_used_percent, tertiary_used_percent
+                FROM usage_hourly
+                WHERE provider = ?
+                """
+
+            if since != nil {
+                sql += " AND hour_start >= ?"
+            }
+            sql += " ORDER BY hour_start DESC LIMIT ?"
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                throw UsageHistoryError.prepareFailed(self.lastErrorMessage())
+            }
+            defer { sqlite3_finalize(stmt) }
+
+            var paramIndex: Int32 = 1
+            sqlite3_bind_text(stmt, paramIndex, provider.rawValue, -1, Self.SQLITE_TRANSIENT)
+            paramIndex += 1
+
+            if let since = since {
+                sqlite3_bind_int64(stmt, paramIndex, Int64(since.timeIntervalSince1970))
+                paramIndex += 1
+            }
+
+            sqlite3_bind_int(stmt, paramIndex, Int32(limit))
+
+            var results: [(Date, Double?, Double?, Double?)] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let timestamp = Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 0)))
+                let primary = self.readOptionalDouble(stmt, 1)
+                let secondary = self.readOptionalDouble(stmt, 2)
+                let tertiary = self.readOptionalDouble(stmt, 3)
+                results.append((timestamp, primary, secondary, tertiary))
+            }
+
+            return results
+        }
+    }
 
     /// Fetch recent history for a provider
     public func fetchHistory(
@@ -615,6 +796,140 @@ public actor UsageHistoryStore {
         )
         try self.insertCost(record)
     }
+
+    // MARK: - Cost Daily
+
+    public func upsertCostDaily(provider: String, date: String, totalTokens: Int?, totalCostUSD: Double?) throws {
+        try self.queue.sync {
+            let sql = """
+                INSERT INTO cost_daily (provider, date, total_tokens, total_cost_usd)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(provider, date) DO UPDATE SET
+                    total_tokens = excluded.total_tokens,
+                    total_cost_usd = excluded.total_cost_usd
+                """
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                throw UsageHistoryError.prepareFailed(self.lastErrorMessage())
+            }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_text(stmt, 1, provider, -1, Self.SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 2, date, -1, Self.SQLITE_TRANSIENT)
+
+            if let totalTokens {
+                sqlite3_bind_int64(stmt, 3, Int64(totalTokens))
+            } else {
+                sqlite3_bind_null(stmt, 3)
+            }
+
+            if let totalCostUSD {
+                sqlite3_bind_double(stmt, 4, totalCostUSD)
+            } else {
+                sqlite3_bind_null(stmt, 4)
+            }
+
+            guard sqlite3_step(stmt) == SQLITE_DONE else {
+                throw UsageHistoryError.insertFailed(self.lastErrorMessage())
+            }
+        }
+    }
+
+    public func fetchCostDaily(
+        provider: String,
+        sinceDate: String,
+        limit: Int = 365
+    ) throws -> [(date: String, totalTokens: Int?, totalCostUSD: Double?)] {
+        let primary = try self.queue.sync {
+            let sql = """
+                SELECT date, total_tokens, total_cost_usd
+                FROM cost_daily
+                WHERE provider = ? AND date >= ?
+                ORDER BY date DESC
+                LIMIT ?
+                """
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                throw UsageHistoryError.prepareFailed(self.lastErrorMessage())
+            }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_text(stmt, 1, provider, -1, Self.SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 2, sinceDate, -1, Self.SQLITE_TRANSIENT)
+            sqlite3_bind_int(stmt, 3, Int32(limit))
+
+            var results: [(String, Int?, Double?)] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let date = String(cString: sqlite3_column_text(stmt, 0))
+
+                let tokens: Int?
+                if sqlite3_column_type(stmt, 1) == SQLITE_NULL {
+                    tokens = nil
+                } else {
+                    tokens = Int(sqlite3_column_int64(stmt, 1))
+                }
+
+                let cost: Double?
+                if sqlite3_column_type(stmt, 2) == SQLITE_NULL {
+                    cost = nil
+                } else {
+                    cost = sqlite3_column_double(stmt, 2)
+                }
+
+                results.append((date, tokens, cost))
+            }
+
+            return results
+        }
+
+        // If the window is too narrow (e.g. just after midnight), include the latest available day.
+        if !primary.isEmpty || limit <= 0 {
+            return primary
+        }
+
+        return try self.queue.sync {
+            let sql = """
+                SELECT date, total_tokens, total_cost_usd
+                FROM cost_daily
+                WHERE provider = ?
+                ORDER BY date DESC
+                LIMIT 1
+                """
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                throw UsageHistoryError.prepareFailed(self.lastErrorMessage())
+            }
+            defer { sqlite3_finalize(stmt) }
+
+            sqlite3_bind_text(stmt, 1, provider, -1, Self.SQLITE_TRANSIENT)
+
+            var results: [(String, Int?, Double?)] = []
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                let date = String(cString: sqlite3_column_text(stmt, 0))
+
+                let tokens: Int?
+                if sqlite3_column_type(stmt, 1) == SQLITE_NULL {
+                    tokens = nil
+                } else {
+                    tokens = Int(sqlite3_column_int64(stmt, 1))
+                }
+
+                let cost: Double?
+                if sqlite3_column_type(stmt, 2) == SQLITE_NULL {
+                    cost = nil
+                } else {
+                    cost = sqlite3_column_double(stmt, 2)
+                }
+
+                results.append((date, tokens, cost))
+            }
+            return results
+        }
+    }
+
 
     // MARK: - Cost History Query
 

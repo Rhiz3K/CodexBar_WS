@@ -110,6 +110,14 @@ extension CodexBarCLI {
             serverArgs.append(arg)
         }
 
+        // Install should be reachable by default. If the user didn't specify a host,
+        // bind on all interfaces.
+        let lowerArgs = serverArgs.map { $0.lowercased() }
+        let hasHostFlag = lowerArgs.contains("--host") || lowerArgs.contains(where: { $0.hasPrefix("--host=") })
+        if !hasHostFlag {
+            serverArgs.insert(contentsOf: ["--host", "0.0.0.0"], at: 0)
+        }
+
         guard let serverPath = Self.resolveServerExecutable() else {
             Self.exit(
                 code: .failure,

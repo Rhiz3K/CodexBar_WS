@@ -11,9 +11,15 @@ enum StaticFiles {
     static func get(_ path: String) -> String? {
         switch path {
         case "style.css":
-            return AssetLoader.loadStaticText("style.css")
+            // Keep the inlined CSS as authoritative for now.
+            // (The external `Resources/static/style.css` needs to stay in sync with the HTML templates.)
+            return Self.css
         case "app.js":
             return AssetLoader.loadStaticText("app.js")
+        case "chart.umd.min.js":
+            return AssetLoader.loadStaticText("chart.umd.min.js")
+        case "chartjs-adapter-date-fns.bundle.min.js":
+            return AssetLoader.loadStaticText("chartjs-adapter-date-fns.bundle.min.js")
         default:
             return nil
         }
@@ -259,6 +265,14 @@ enum StaticFiles {
             border: 1px solid var(--border-color);
             border-radius: 4px;
             color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .model-tag.active {
+            background: rgba(88, 166, 255, 0.15);
+            border-color: rgba(88, 166, 255, 0.5);
+            color: var(--accent-blue);
         }
 
         .credits-row {
@@ -928,8 +942,8 @@ enum DashboardPage {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>CodexBar Dashboard</title>
                 <link rel="stylesheet" href="/static/style.css">
-                <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
-                <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
+                <script src="/static/chart.umd.min.js"></script>
+                <script src="/static/chartjs-adapter-date-fns.bundle.min.js"></script>
             </head>
             <body>
                 <div class="container">
@@ -1007,11 +1021,11 @@ enum DashboardPage {
                 <div class="usage-item">
                     <div class="usage-item-header">
                         <span class="usage-label">Weekly</span>
-                        <span class="usage-percent \(secClass)">\(Int(sec))%</span>
+                        <span class="usage-percent weekly-usage \(secClass)">\(Int(sec))%</span>
                     </div>
                     <div class="usage-bar"><div class="usage-fill \(secClass)" style="width: \(min(100, sec))%"></div></div>
                     <div class="usage-meta">
-                        <span class="reset-time" data-reset-at="\(secondaryResetAt)"></span>
+                        <span class="reset-time weekly-reset" data-reset-at="\(secondaryResetAt)"></span>
                         \(secPredHTML)
                     </div>
                 </div>
@@ -1037,17 +1051,28 @@ enum DashboardPage {
             monthCost = Self.formatUSD(cost.last30DaysCostUSD)
 
             if !cost.modelsUsed.isEmpty {
-                let modelTags = cost.modelsUsed.map { "<span class=\"model-tag\">\($0)</span>" }.joined()
-                modelsHTML = "<div class=\"models-row\">\(modelTags)</div>"
+                let providerAttr = Self.escapeAttribute(providerName)
+                let modelTags = cost.modelsUsed
+                    .map { rawName in
+                        let short = Self.formatModelName(rawName, provider: providerName)
+                        let label = Self.escapeHTML(short)
+                        let rawAttr = Self.escapeAttribute(rawName)
+                        return "<span class=\"model-tag\" data-provider=\"\(providerAttr)\" data-model=\"\(rawAttr)\">\(label)</span>"
+                    }
+                    .joined()
+                let allTag = "<span class=\"model-tag active\" data-provider=\"\(providerAttr)\" data-model=\"\" data-all=\"1\">All</span>"
+                modelsHTML = "<div class=\"models-row\">\(allTag)\(modelTags)</div>"
             } else {
-                modelsHTML = "<div class=\"models-row\"><span class=\"model-tag\">—</span></div>"
+            let providerAttr = Self.escapeAttribute(providerName)
+            modelsHTML = "<div class=\"models-row\"><span class=\"model-tag active\" data-provider=\"\(providerAttr)\" data-model=\"\" data-all=\"1\">All</span><span class=\"model-tag\">—</span></div>"
             }
         } else {
             todayTokens = "—"
             todayCost = "—"
             monthTokens = "—"
             monthCost = "—"
-            modelsHTML = "<div class=\"models-row\"><span class=\"model-tag\">—</span></div>"
+            let providerAttr = Self.escapeAttribute(providerName)
+            modelsHTML = "<div class=\"models-row\"><span class=\"model-tag active\" data-provider=\"\(providerAttr)\" data-model=\"\" data-all=\"1\">All</span><span class=\"model-tag\">—</span></div>"
         }
 
         let costHTML = """
@@ -1069,6 +1094,7 @@ enum DashboardPage {
                     <div class="stat-label">Cost</div>
                 </div>
             </div>
+
             \(modelsHTML)
             """
 
@@ -1086,11 +1112,11 @@ enum DashboardPage {
                         <div class="usage-item">
                             <div class="usage-item-header">
                                 <span class="usage-label">Session</span>
-                                <span class="usage-percent \(primaryClass)">\(Int(primaryUsage))%</span>
+                                <span class="usage-percent session-usage \(primaryClass)">\(Int(primaryUsage))%</span>
                             </div>
                             <div class="usage-bar"><div class="usage-fill \(primaryClass)" style="width: \(min(100, primaryUsage))%"></div></div>
                             <div class="usage-meta">
-                                <span class="reset-time" data-reset-at="\(primaryResetAt)"></span>
+                                <span class="reset-time session-reset" data-reset-at="\(primaryResetAt)"></span>
                                 \(primaryPredHTML)
                             </div>
                         </div>
@@ -1193,10 +1219,43 @@ enum DashboardPage {
         guard let count = count else { return "—" }
         if count >= 1_000_000 {
             return String(format: "%.1fM", Double(count) / 1_000_000)
-        } else if count >= 1000 {
-            return String(format: "%.0fK", Double(count) / 1000)
+        }
+        if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000)
         }
         return "\(count)"
+    }
+
+    private static func formatModelName(_ modelName: String, provider: String) -> String {
+        // Claude model names are often verbose (eg. "claude-haiku-4-5-20251001").
+        // For dashboard tags we prefer a compact version ("haiku-4-5").
+        if provider.lowercased() == "claude" {
+            var result = modelName
+            if result.hasPrefix("claude-") {
+                result.removeFirst("claude-".count)
+            }
+
+            // Drop trailing "-YYYYMMDD" build suffix.
+            if let match = result.range(of: "-\\d{8}$", options: .regularExpression) {
+                result.removeSubrange(match)
+            }
+            return result
+        }
+
+        return modelName
+    }
+
+    private static func escapeHTML(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+    }
+
+    private static func escapeAttribute(_ text: String) -> String {
+        Self.escapeHTML(text)
     }
 
     private static func formatUSD(_ amount: Double?) -> String {
@@ -1234,8 +1293,8 @@ enum ProviderPage {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>\(provider.rawValue.capitalized) - CodexBar</title>
                 <link rel="stylesheet" href="/static/style.css">
-                <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
-                <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
+                <script src="/static/chart.umd.min.js"></script>
+                <script src="/static/chartjs-adapter-date-fns.bundle.min.js"></script>
                 <style>
                     .back-link { color: var(--accent-blue); text-decoration: none; font-size: 14px; }
                     .back-link:hover { text-decoration: underline; }
