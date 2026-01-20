@@ -86,13 +86,14 @@ extension UsageStore {
             provider: provider,
             settings: self.settings,
             tokenOverride: override)
+        let verbose = self.settings.isVerboseLoggingEnabled
         let context = ProviderFetchContext(
             runtime: .app,
             sourceMode: sourceMode,
             includeCredits: false,
             webTimeout: 60,
             webDebugDumpHTML: false,
-            verbose: false,
+            verbose: verbose,
             env: env,
             settings: snapshot,
             fetcher: self.codexFetcher,

@@ -71,6 +71,7 @@ extension UsageStore {
             _ = self.settings.mergeIcons
             _ = self.settings.selectedMenuProvider
             _ = self.settings.debugLoadingPattern
+            _ = self.settings.debugKeepCLISessionsAlive
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -202,14 +203,16 @@ final class UsageStore {
     @ObservationIgnored private let registry: ProviderRegistry
     @ObservationIgnored let settings: SettingsStore
     @ObservationIgnored private let sessionQuotaNotifier: SessionQuotaNotifier
-    @ObservationIgnored private let sessionQuotaLogger = CodexBarLog.logger("sessionQuota")
-    @ObservationIgnored private let openAIWebLogger = CodexBarLog.logger("openai-web")
-    @ObservationIgnored private let tokenCostLogger = CodexBarLog.logger("token-cost")
+    @ObservationIgnored private let sessionQuotaLogger = CodexBarLog.logger(LogCategories.sessionQuota)
+    @ObservationIgnored private let openAIWebLogger = CodexBarLog.logger(LogCategories.openAIWeb)
+    @ObservationIgnored private let tokenCostLogger = CodexBarLog.logger(LogCategories.tokenCost)
+    @ObservationIgnored let augmentLogger = CodexBarLog.logger(LogCategories.augment)
+    @ObservationIgnored let providerLogger = CodexBarLog.logger(LogCategories.providers)
     @ObservationIgnored private var openAIWebDebugLines: [String] = []
     @ObservationIgnored var failureGates: [UsageProvider: ConsecutiveFailureGate] = [:]
     @ObservationIgnored var tokenFailureGates: [UsageProvider: ConsecutiveFailureGate] = [:]
     @ObservationIgnored var providerSpecs: [UsageProvider: ProviderSpec] = [:]
-    @ObservationIgnored private let providerMetadata: [UsageProvider: ProviderMetadata]
+    @ObservationIgnored let providerMetadata: [UsageProvider: ProviderMetadata]
     @ObservationIgnored private var timerTask: Task<Void, Never>?
     @ObservationIgnored private var tokenTimerTask: Task<Void, Never>?
     @ObservationIgnored private var tokenRefreshSequenceTask: Task<Void, Never>?
@@ -250,6 +253,7 @@ final class UsageStore {
             codexFetcher: fetcher,
             claudeFetcher: self.claudeFetcher,
             browserDetection: browserDetection)
+        self.logStartupState()
         self.bindSettings()
         self.detectVersions()
         self.pathDebugInfo = PathDebugSnapshot(
@@ -647,7 +651,8 @@ final class UsageStore {
     private func refreshCreditsIfNeeded() async {
         guard self.isEnabled(.codex) else { return }
         do {
-            let credits = try await self.codexFetcher.loadLatestCredits()
+            let credits = try await self.codexFetcher.loadLatestCredits(
+                keepCLISessionsAlive: self.settings.debugKeepCLISessionsAlive)
             await MainActor.run {
                 self.credits = credits
                 self.lastCreditsError = nil
@@ -686,6 +691,29 @@ final class UsageStore {
 }
 
 extension UsageStore {
+    private static let openAIWebRefreshMultiplier: TimeInterval = 5
+
+    private func openAIWebRefreshIntervalSeconds() -> TimeInterval {
+        let base = max(self.settings.refreshFrequency.seconds ?? 0, 120)
+        return base * Self.openAIWebRefreshMultiplier
+    }
+
+    func handleOpenAIWebAccessChange(enabled: Bool) {
+        guard enabled == false else { return }
+        self.resetOpenAIWebState()
+    }
+
+    func requestOpenAIDashboardRefreshIfStale(reason: String) {
+        guard self.isEnabled(.codex), self.settings.codexCookieSource.isEnabled else { return }
+        let now = Date()
+        let refreshInterval = self.openAIWebRefreshIntervalSeconds()
+        let lastUpdatedAt = self.openAIDashboard?.updatedAt ?? self.lastOpenAIDashboardSnapshot?.updatedAt
+        if let lastUpdatedAt, now.timeIntervalSince(lastUpdatedAt) < refreshInterval { return }
+        let stamp = now.formatted(date: .abbreviated, time: .shortened)
+        self.logOpenAIWeb("[\(stamp)] OpenAI web refresh request: \(reason)")
+        Task { await self.refreshOpenAIDashboardIfNeeded(force: true) }
+    }
+
     private func applyOpenAIDashboard(_ dash: OpenAIDashboardSnapshot, targetEmail: String?) async {
         await MainActor.run {
             self.openAIDashboard = dash
@@ -730,17 +758,7 @@ extension UsageStore {
 
     private func refreshOpenAIDashboardIfNeeded(force: Bool = false) async {
         guard self.isEnabled(.codex), self.settings.codexCookieSource.isEnabled else {
-            await MainActor.run {
-                self.openAIDashboard = nil
-                self.lastOpenAIDashboardError = nil
-                self.lastOpenAIDashboardSnapshot = nil
-                self.lastOpenAIDashboardTargetEmail = nil
-                self.openAIDashboardRequiresLogin = false
-                self.openAIDashboardCookieImportStatus = nil
-                self.openAIDashboardCookieImportDebugLog = nil
-                self.lastOpenAIDashboardCookieImportAttemptAt = nil
-                self.lastOpenAIDashboardCookieImportEmail = nil
-            }
+            self.resetOpenAIWebState()
             return
         }
 
@@ -748,7 +766,7 @@ extension UsageStore {
         self.handleOpenAIWebTargetEmailChangeIfNeeded(targetEmail: targetEmail)
 
         let now = Date()
-        let minInterval = max(self.settings.refreshFrequency.seconds ?? 0, 120)
+        let minInterval = self.openAIWebRefreshIntervalSeconds()
         if !force,
            !self.openAIWebAccountDidChange,
            self.lastOpenAIDashboardError == nil,
@@ -1072,12 +1090,25 @@ extension UsageStore {
     }
 
     private func logOpenAIWeb(_ message: String) {
-        self.openAIWebLogger.debug(message)
-        self.openAIWebDebugLines.append(message)
+        let safeMessage = LogRedactor.redact(message)
+        self.openAIWebLogger.debug(safeMessage)
+        self.openAIWebDebugLines.append(safeMessage)
         if self.openAIWebDebugLines.count > 240 {
             self.openAIWebDebugLines.removeFirst(self.openAIWebDebugLines.count - 240)
         }
         self.openAIDashboardCookieImportDebugLog = self.openAIWebDebugLines.joined(separator: "\n")
+    }
+
+    private func resetOpenAIWebState() {
+        self.openAIDashboard = nil
+        self.lastOpenAIDashboardError = nil
+        self.lastOpenAIDashboardSnapshot = nil
+        self.lastOpenAIDashboardTargetEmail = nil
+        self.openAIDashboardRequiresLogin = false
+        self.openAIDashboardCookieImportStatus = nil
+        self.openAIDashboardCookieImportDebugLog = nil
+        self.lastOpenAIDashboardCookieImportAttemptAt = nil
+        self.lastOpenAIDashboardCookieImportEmail = nil
     }
 
     private func dashboardEmailMismatch(expected: String?, actual: String?) -> Bool {
@@ -1102,7 +1133,10 @@ extension UsageStore {
 
 extension UsageStore {
     func debugDumpClaude() async {
-        let output = await self.claudeFetcher.debugRawProbe(model: "sonnet")
+        let fetcher = ClaudeUsageFetcher(
+            browserDetection: self.browserDetection,
+            keepCLISessionsAlive: self.settings.debugKeepCLISessionsAlive)
+        let output = await fetcher.debugRawProbe(model: "sonnet")
         let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("codexbar-claude-probe.txt")
         try? output.write(to: url, atomically: true, encoding: .utf8)
         await MainActor.run {
@@ -1145,6 +1179,7 @@ extension UsageStore {
         let claudeUsageDataSource = self.settings.claudeUsageDataSource
         let claudeCookieSource = self.settings.claudeCookieSource
         let claudeCookieHeader = self.settings.claudeCookieHeader
+        let keepCLISessionsAlive = self.settings.debugKeepCLISessionsAlive
         let cursorCookieSource = self.settings.cursorCookieSource
         let cursorCookieHeader = self.settings.cursorCookieHeader
         return await Task.detached(priority: .utility) { () -> String in
@@ -1158,7 +1193,8 @@ extension UsageStore {
                     claudeWebExtrasEnabled: claudeWebExtrasEnabled,
                     claudeUsageDataSource: claudeUsageDataSource,
                     claudeCookieSource: claudeCookieSource,
-                    claudeCookieHeader: claudeCookieHeader)
+                    claudeCookieHeader: claudeCookieHeader,
+                    keepCLISessionsAlive: keepCLISessionsAlive)
                 await MainActor.run { self.probeLogs[.claude] = text }
                 return text
             case .zai:
@@ -1249,7 +1285,8 @@ extension UsageStore {
         claudeWebExtrasEnabled: Bool,
         claudeUsageDataSource: ClaudeUsageDataSource,
         claudeCookieSource: ProviderCookieSource,
-        claudeCookieHeader: String) async -> String
+        claudeCookieHeader: String,
+        keepCLISessionsAlive: Bool) async -> String
     {
         await self.runWithTimeout(seconds: 15) {
             var lines: [String] = []
@@ -1317,7 +1354,10 @@ extension UsageStore {
                     return lines.joined(separator: "\n")
                 }
             case .cli:
-                let cli = await self.claudeFetcher.debugRawProbe(model: "sonnet")
+                let fetcher = ClaudeUsageFetcher(
+                    browserDetection: self.browserDetection,
+                    keepCLISessionsAlive: keepCLISessionsAlive)
+                let cli = await fetcher.debugRawProbe(model: "sonnet")
                 lines.append(cli)
                 return lines.joined(separator: "\n")
             case .oauth:

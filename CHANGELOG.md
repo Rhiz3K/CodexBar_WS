@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.18.0-beta.2 — 2026-01-20
+### Highlights
+- OpenAI web dashboard refresh cadence now follows 5× the base refresh interval.
+- OpenAI web dashboard WebView is torn down after each scrape to reduce idle CPU.
+- Codex settings now include a toggle to disable OpenAI web extras.
+
+### Menu & Menu Bar
+- Menu: opening OpenAI web submenus triggers a refresh when the data is stale.
+- Debug: add a toggle to keep Codex/Claude CLI sessions alive between probes.
+- Debug: add a button to reset CLI probe sessions.
+- App icon: use the classic icon on macOS 15 and earlier while keeping Liquid Glass for macOS 26+ (#178). Thanks @zerone0x!
+
 ## 0.18.0-beta.1 — 2026-01-18
 ### Highlights
 - New providers: OpenCode (web usage), Vertex AI, Kiro, Kimi, Kimi K2, Augment, Amp, Synthetic.

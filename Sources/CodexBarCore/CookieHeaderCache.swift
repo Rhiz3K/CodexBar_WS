@@ -13,23 +13,26 @@ public enum CookieHeaderCache {
         }
     }
 
-    private static let log = CodexBarLog.logger("cookie-cache")
+    private static let log = CodexBarLog.logger(LogCategories.cookieCache)
     private nonisolated(unsafe) static var legacyBaseURLOverride: URL?
 
     public static func load(provider: UsageProvider) -> Entry? {
         let key = KeychainCacheStore.Key.cookie(provider: provider)
         switch KeychainCacheStore.load(key: key, as: Entry.self) {
         case let .found(entry):
+            self.log.debug("Cookie cache hit", metadata: ["provider": provider.rawValue])
             return entry
         case .invalid:
+            self.log.warning("Cookie cache invalid; clearing", metadata: ["provider": provider.rawValue])
             KeychainCacheStore.clear(key: key)
         case .missing:
-            break
+            self.log.debug("Cookie cache miss", metadata: ["provider": provider.rawValue])
         }
 
         guard let legacy = self.loadLegacyEntry(for: provider) else { return nil }
         KeychainCacheStore.store(key: key, entry: legacy)
         self.removeLegacyEntry(for: provider)
+        self.log.debug("Cookie cache migrated from legacy store", metadata: ["provider": provider.rawValue])
         return legacy
     }
 
@@ -48,12 +51,14 @@ public enum CookieHeaderCache {
         let key = KeychainCacheStore.Key.cookie(provider: provider)
         KeychainCacheStore.store(key: key, entry: entry)
         self.removeLegacyEntry(for: provider)
+        self.log.debug("Cookie cache stored", metadata: ["provider": provider.rawValue, "source": sourceLabel])
     }
 
     public static func clear(provider: UsageProvider) {
         let key = KeychainCacheStore.Key.cookie(provider: provider)
         KeychainCacheStore.clear(key: key)
         self.removeLegacyEntry(for: provider)
+        self.log.debug("Cookie cache cleared", metadata: ["provider": provider.rawValue])
     }
 
     static func load(from url: URL) -> Entry? {

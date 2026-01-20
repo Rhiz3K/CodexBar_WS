@@ -66,13 +66,14 @@ struct ProviderRegistry {
                             settings: settings,
                             tokenOverride: nil)
                     }
+                    let verbose = settings.isVerboseLoggingEnabled
                     let context = ProviderFetchContext(
                         runtime: .app,
                         sourceMode: sourceMode,
                         includeCredits: false,
                         webTimeout: 60,
                         webDebugDumpHTML: false,
-                        verbose: false,
+                        verbose: verbose,
                         env: env,
                         settings: snapshot,
                         fetcher: codexFetcher,
@@ -139,6 +140,7 @@ struct ProviderRegistry {
 
         return ProviderSettingsSnapshot.make(
             debugMenuEnabled: settings.debugMenuEnabled,
+            debugKeepCLISessionsAlive: settings.debugKeepCLISessionsAlive,
             codex: ProviderSettingsSnapshot.CodexProviderSettings(
                 usageDataSource: settings.codexUsageDataSource,
                 cookieSource: Self.cookieSource(

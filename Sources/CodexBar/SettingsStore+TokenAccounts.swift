@@ -28,6 +28,12 @@ extension SettingsStore {
         self.updateProviderConfig(provider: provider) { entry in
             entry.tokenAccounts = updated
         }
+        CodexBarLog.logger(LogCategories.tokenAccounts).info(
+            "Active token account updated",
+            metadata: [
+                "provider": provider.rawValue,
+                "index": "\(clamped)",
+            ])
     }
 
     func addTokenAccount(provider: UsageProvider, label: String, token: String) {
@@ -52,6 +58,12 @@ extension SettingsStore {
             entry.tokenAccounts = updated
         }
         self.applyTokenAccountCookieSourceIfNeeded(provider: provider)
+        CodexBarLog.logger(LogCategories.tokenAccounts).info(
+            "Token account added",
+            metadata: [
+                "provider": provider.rawValue,
+                "count": "\(updated.accounts.count)",
+            ])
     }
 
     func removeTokenAccount(provider: UsageProvider, accountID: UUID) {
@@ -68,6 +80,12 @@ extension SettingsStore {
                     activeIndex: clamped)
             }
         }
+        CodexBarLog.logger(LogCategories.tokenAccounts).info(
+            "Token account removed",
+            metadata: [
+                "provider": provider.rawValue,
+                "count": "\(filtered.count)",
+            ])
     }
 
     func ensureTokenAccountsLoaded() {
@@ -76,7 +94,7 @@ extension SettingsStore {
     }
 
     func reloadTokenAccounts() {
-        let log = CodexBarLog.logger("token-accounts")
+        let log = CodexBarLog.logger(LogCategories.tokenAccounts)
         let accounts: [UsageProvider: ProviderTokenAccountData]
         do {
             guard let loaded = try self.configStore.load() else { return }
@@ -96,7 +114,7 @@ extension SettingsStore {
         do {
             try self.configStore.save(self.config)
         } catch {
-            CodexBarLog.logger("token-accounts").error("Failed to persist config: \(error)")
+            CodexBarLog.logger(LogCategories.tokenAccounts).error("Failed to persist config: \(error)")
             return
         }
         NSWorkspace.shared.open(self.configStore.fileURL)

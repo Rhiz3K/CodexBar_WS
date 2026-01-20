@@ -171,7 +171,12 @@ extension SettingsStore {
             return false
         }()
         let debugFileLoggingEnabled = userDefaults.object(forKey: "debugFileLoggingEnabled") as? Bool ?? false
+        let debugLogLevelRaw = userDefaults.string(forKey: "debugLogLevel") ?? CodexBarLog.Level.verbose.rawValue
+        if userDefaults.string(forKey: "debugLogLevel") == nil {
+            userDefaults.set(debugLogLevelRaw, forKey: "debugLogLevel")
+        }
         let debugLoadingPatternRaw = userDefaults.string(forKey: "debugLoadingPattern")
+        let debugKeepCLISessionsAlive = userDefaults.object(forKey: "debugKeepCLISessionsAlive") as? Bool ?? false
         let statusChecksEnabled = userDefaults.object(forKey: "statusChecksEnabled") as? Bool ?? true
         let sessionQuotaDefault = userDefaults.object(forKey: "sessionQuotaNotificationsEnabled") as? Bool
         let sessionQuotaNotificationsEnabled = sessionQuotaDefault ?? true
@@ -217,7 +222,9 @@ extension SettingsStore {
             debugMenuEnabled: debugMenuEnabled,
             debugDisableKeychainAccess: debugDisableKeychainAccess,
             debugFileLoggingEnabled: debugFileLoggingEnabled,
+            debugLogLevelRaw: debugLogLevelRaw,
             debugLoadingPatternRaw: debugLoadingPatternRaw,
+            debugKeepCLISessionsAlive: debugKeepCLISessionsAlive,
             statusChecksEnabled: statusChecksEnabled,
             sessionQuotaNotificationsEnabled: sessionQuotaNotificationsEnabled,
             usageBarsShowUsed: usageBarsShowUsed,
@@ -294,7 +301,7 @@ extension SettingsStore {
     }
 
     func setProviderEnabled(provider: UsageProvider, metadata _: ProviderMetadata, enabled: Bool) {
-        CodexBarLog.logger("settings").debug(
+        CodexBarLog.logger(LogCategories.settings).debug(
             "Provider toggle updated",
             metadata: ["provider": provider.rawValue, "enabled": "\(enabled)"])
         self.updateProviderConfig(provider: provider) { entry in
