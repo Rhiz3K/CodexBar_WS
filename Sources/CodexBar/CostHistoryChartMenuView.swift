@@ -23,68 +23,68 @@ struct CostHistoryChartMenuView: View {
     private let provider: UsageProvider
     private let daily: [DailyEntry]
     private let totalCostUSD: Double?
+    private let updatedAt: Date
     private let width: CGFloat
     @State private var selectedDateKey: String?
 
-    init(provider: UsageProvider, daily: [DailyEntry], totalCostUSD: Double?, width: CGFloat) {
+    init(provider: UsageProvider, daily: [DailyEntry], totalCostUSD: Double?, updatedAt: Date, width: CGFloat) {
         self.provider = provider
         self.daily = daily
         self.totalCostUSD = totalCostUSD
+        self.updatedAt = updatedAt
         self.width = width
     }
 
     var body: some View {
-        let model = Self.makeModel(provider: self.provider, daily: self.daily)
+        let model = Self.makeModel(provider: self.provider, daily: self.daily, updatedAt: self.updatedAt)
         VStack(alignment: .leading, spacing: 10) {
             if model.points.isEmpty {
                 Text("No cost history data.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
-                Chart {
-                    ForEach(model.points) { point in
-                        BarMark(
-                            x: .value("Day", point.date, unit: .day),
-                            y: .value("Cost", point.costUSD))
-                            .foregroundStyle(model.barColor)
-                    }
-                    if let peak = Self.peakPoint(model: model) {
-                        let capStart = max(peak.costUSD - Self.capHeight(maxValue: model.maxCostUSD), 0)
-                        BarMark(
-                            x: .value("Day", peak.date, unit: .day),
-                            yStart: .value("Cap start", capStart),
-                            yEnd: .value("Cap end", peak.costUSD))
-                            .foregroundStyle(Color(nsColor: .systemYellow))
-                    }
-                }
-                .chartYAxis(.hidden)
-                .chartXAxis {
-                    AxisMarks(values: model.axisDates) { _ in
-                        AxisGridLine().foregroundStyle(Color.clear)
-                        AxisTick().foregroundStyle(Color.clear)
-                        AxisValueLabel(format: .dateTime.month(.abbreviated).day())
-                            .font(.caption2)
-                            .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                    }
-                }
-                .chartLegend(.hidden)
-                .frame(height: 130)
-                .chartOverlay { proxy in
-                    GeometryReader { geo in
-                        ZStack(alignment: .topLeading) {
-                            if let rect = self.selectionBandRect(model: model, proxy: proxy, geo: geo) {
-                                Rectangle()
-                                    .fill(Self.selectionBandColor)
-                                    .frame(width: rect.width, height: rect.height)
-                                    .position(x: rect.midX, y: rect.midY)
-                                    .allowsHitTesting(false)
-                            }
-                            MouseLocationReader { location in
-                                self.updateSelection(location: location, model: model, proxy: proxy, geo: geo)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: 4) {
+                    Chart {
+                        ForEach(model.points) { point in
+                            BarMark(
+                                x: .value("Day", point.date, unit: .day),
+                                y: .value("Cost", point.costUSD))
+                                .foregroundStyle(model.barColor)
                         }
+                        if let peak = Self.peakPoint(model: model) {
+                            let capStart = max(peak.costUSD - Self.capHeight(maxValue: model.maxCostUSD), 0)
+                            BarMark(
+                                x: .value("Day", peak.date, unit: .day),
+                                yStart: .value("Cap start", capStart),
+                                yEnd: .value("Cap end", peak.costUSD))
+                                .foregroundStyle(Color(nsColor: .systemYellow))
+                        }
+                    }
+                    .chartYAxis(.hidden)
+                    .chartXAxis(.hidden)
+                    .chartLegend(.hidden)
+                    .frame(height: 130)
+                    .chartOverlay { proxy in
+                        GeometryReader { geo in
+                            ZStack(alignment: .topLeading) {
+                                if let rect = self.selectionBandRect(model: model, proxy: proxy, geo: geo) {
+                                    Rectangle()
+                                        .fill(Self.selectionBandColor)
+                                        .frame(width: rect.width, height: rect.height)
+                                        .position(x: rect.midX, y: rect.midY)
+                                        .allowsHitTesting(false)
+                                }
+                                MouseLocationReader { location in
+                                    self.updateSelection(location: location, model: model, proxy: proxy, geo: geo)
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .contentShape(Rectangle())
+                            }
+                        }
+                    }
+
+                    if let dateRange = model.dateRange {
+                        ChartDateRangeFooterView(startDate: dateRange.start, endDate: dateRange.end)
                     }
                 }
 
@@ -122,8 +122,8 @@ struct CostHistoryChartMenuView: View {
         let pointsByDateKey: [String: Point]
         let entriesByDateKey: [String: DailyEntry]
         let dateKeys: [(key: String, date: Date)]
-        let axisDates: [Date]
         let barColor: Color
+        let dateRange: (start: Date, end: Date)?
         let peakKey: String?
         let maxCostUSD: Double
     }
@@ -134,7 +134,7 @@ struct CostHistoryChartMenuView: View {
         maxValue * 0.05
     }
 
-    private static func makeModel(provider: UsageProvider, daily: [DailyEntry]) -> Model {
+    private static func makeModel(provider: UsageProvider, daily: [DailyEntry], updatedAt: Date) -> Model {
         let sorted = daily.sorted { lhs, rhs in lhs.date < rhs.date }
         var points: [Point] = []
         points.reserveCapacity(sorted.count)
@@ -166,11 +166,7 @@ struct CostHistoryChartMenuView: View {
             maxCostUSD = max(maxCostUSD, costUSD)
         }
 
-        let axisDates: [Date] = {
-            guard let first = dateKeys.first?.date, let last = dateKeys.last?.date else { return [] }
-            if Calendar.current.isDate(first, inSameDayAs: last) { return [first] }
-            return [first, last]
-        }()
+        let dateRange = Self.windowDateRange(updatedAt: updatedAt)
 
         let barColor = Self.barColor(for: provider)
         return Model(
@@ -178,8 +174,8 @@ struct CostHistoryChartMenuView: View {
             pointsByDateKey: pointsByKey,
             entriesByDateKey: entriesByKey,
             dateKeys: dateKeys,
-            axisDates: axisDates,
             barColor: barColor,
+            dateRange: dateRange,
             peakKey: peak?.key,
             maxCostUSD: maxCostUSD)
     }
@@ -204,6 +200,20 @@ struct CostHistoryChartMenuView: View {
         comps.day = day
         comps.hour = 12
         return comps.date
+    }
+
+    private static func windowDateRange(updatedAt: Date) -> (start: Date, end: Date) {
+        let end = self.noonDate(from: updatedAt)
+        let start = Calendar.current.date(byAdding: .day, value: -29, to: end) ?? end
+        return (start: start, end: end)
+    }
+
+    private static func noonDate(from date: Date) -> Date {
+        var comps = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        comps.calendar = Calendar.current
+        comps.timeZone = TimeZone.current
+        comps.hour = 12
+        return comps.date ?? date
     }
 
     private static func peakPoint(model: Model) -> Point? {

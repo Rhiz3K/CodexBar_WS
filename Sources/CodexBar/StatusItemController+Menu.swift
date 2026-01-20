@@ -1033,6 +1033,7 @@ extension StatusItemController {
             provider: provider,
             daily: tokenSnapshot.daily,
             totalCostUSD: tokenSnapshot.last30DaysCostUSD,
+            updatedAt: tokenSnapshot.updatedAt,
             width: width)
         let hosting = MenuHostingView(rootView: chartView)
         // Use NSHostingController for efficient size calculation without multiple layout passes
