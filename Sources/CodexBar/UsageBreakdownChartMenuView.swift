@@ -35,51 +35,49 @@ struct UsageBreakdownChartMenuView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
-                Chart {
-                    ForEach(model.points) { point in
-                        BarMark(
-                            x: .value("Day", point.date, unit: .day),
-                            y: .value("Credits used", point.creditsUsed))
-                            .foregroundStyle(by: .value("Service", point.service))
-                    }
-                    if let peak = model.peakPoint {
-                        let capStart = max(peak.creditsUsed - Self.capHeight(maxValue: model.maxCreditsUsed), 0)
-                        BarMark(
-                            x: .value("Day", peak.date, unit: .day),
-                            yStart: .value("Cap start", capStart),
-                            yEnd: .value("Cap end", peak.creditsUsed))
-                            .foregroundStyle(Color(nsColor: .systemYellow))
-                    }
-                }
-                .chartForegroundStyleScale(domain: model.services, range: model.serviceColors)
-                .chartYAxis(.hidden)
-                .chartXAxis {
-                    AxisMarks(values: model.axisDates) { _ in
-                        AxisGridLine().foregroundStyle(Color.clear)
-                        AxisTick().foregroundStyle(Color.clear)
-                        AxisValueLabel(format: .dateTime.month(.abbreviated).day())
-                            .font(.caption2)
-                            .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                    }
-                }
-                .chartLegend(.hidden)
-                .frame(height: 130)
-                .chartOverlay { proxy in
-                    GeometryReader { geo in
-                        ZStack(alignment: .topLeading) {
-                            if let rect = self.selectionBandRect(model: model, proxy: proxy, geo: geo) {
-                                Rectangle()
-                                    .fill(Self.selectionBandColor)
-                                    .frame(width: rect.width, height: rect.height)
-                                    .position(x: rect.midX, y: rect.midY)
-                                    .allowsHitTesting(false)
-                            }
-                            MouseLocationReader { location in
-                                self.updateSelection(location: location, model: model, proxy: proxy, geo: geo)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: 4) {
+                    Chart {
+                        ForEach(model.points) { point in
+                            BarMark(
+                                x: .value("Day", point.date, unit: .day),
+                                y: .value("Credits used", point.creditsUsed))
+                                .foregroundStyle(by: .value("Service", point.service))
                         }
+                        if let peak = model.peakPoint {
+                            let capStart = max(peak.creditsUsed - Self.capHeight(maxValue: model.maxCreditsUsed), 0)
+                            BarMark(
+                                x: .value("Day", peak.date, unit: .day),
+                                yStart: .value("Cap start", capStart),
+                                yEnd: .value("Cap end", peak.creditsUsed))
+                                .foregroundStyle(Color(nsColor: .systemYellow))
+                        }
+                    }
+                    .chartForegroundStyleScale(domain: model.services, range: model.serviceColors)
+                    .chartYAxis(.hidden)
+                    .chartXAxis(.hidden)
+                    .chartLegend(.hidden)
+                    .frame(height: 130)
+                    .chartOverlay { proxy in
+                        GeometryReader { geo in
+                            ZStack(alignment: .topLeading) {
+                                if let rect = self.selectionBandRect(model: model, proxy: proxy, geo: geo) {
+                                    Rectangle()
+                                        .fill(Self.selectionBandColor)
+                                        .frame(width: rect.width, height: rect.height)
+                                        .position(x: rect.midX, y: rect.midY)
+                                        .allowsHitTesting(false)
+                                }
+                                MouseLocationReader { location in
+                                    self.updateSelection(location: location, model: model, proxy: proxy, geo: geo)
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .contentShape(Rectangle())
+                            }
+                        }
+                    }
+
+                    if let dateRange = model.dateRange {
+                        ChartDateRangeFooterView(startDate: dateRange.start, endDate: dateRange.end)
                     }
                 }
 
@@ -132,7 +130,7 @@ struct UsageBreakdownChartMenuView: View {
         let peakPoint: (date: Date, creditsUsed: Double)?
         let services: [String]
         let serviceColors: [Color]
-        let axisDates: [Date]
+        let dateRange: (start: Date, end: Date)?
         let maxCreditsUsed: Double
 
         func color(for service: String) -> Color {
@@ -188,7 +186,10 @@ struct UsageBreakdownChartMenuView: View {
 
         let services = Self.serviceOrder(from: sorted)
         let colors = services.map { Self.colorForService($0) }
-        let axisDates = Self.axisDates(fromSortedDays: sorted)
+        let dateRange: (start: Date, end: Date)? = {
+            guard let start = dayDates.first?.date, let end = dayDates.last?.date else { return nil }
+            return (start: start, end: end)
+        }()
 
         return Model(
             points: points,
@@ -198,7 +199,7 @@ struct UsageBreakdownChartMenuView: View {
             peakPoint: peak,
             services: services,
             serviceColors: colors,
-            axisDates: axisDates,
+            dateRange: dateRange,
             maxCreditsUsed: maxCreditsUsed)
     }
 
@@ -238,19 +239,6 @@ struct UsageBreakdownChartMenuView: View {
         ]
         let idx = abs(service.hashValue) % palette.count
         return palette[idx]
-    }
-
-    private static func axisDates(fromSortedDays sortedDays: [OpenAIDashboardDailyBreakdown]) -> [Date] {
-        guard let first = sortedDays.first, let last = sortedDays.last else { return [] }
-        guard let firstDate = self.dateFromDayKey(first.day),
-              let lastDate = self.dateFromDayKey(last.day)
-        else {
-            return []
-        }
-        if Calendar.current.isDate(firstDate, inSameDayAs: lastDate) {
-            return [firstDate]
-        }
-        return [firstDate, lastDate]
     }
 
     private static func dateFromDayKey(_ key: String) -> Date? {
